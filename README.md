@@ -15,15 +15,34 @@ A Discord bot for playing Mafia games in your server channels.
 ## Setup
 
 ### Prerequisites
-- Node.js 16.0.0 or higher
+- **Node.js 18.0.0 or higher** (recommended: 18.20.4 or 20.x)
+- npm or yarn package manager
 - A Discord application and bot token
+
+### Node.js Version Issues
+If you encounter `ReadableStream is not defined` errors:
+1. **Update Node.js**: Use Node.js 18.20.4+ or 20.x
+2. **Use nvm** (recommended):
+   ```bash
+   nvm install 18.20.4
+   nvm use 18.20.4
+   ```
+3. **Check version**: `node --version` should show 18.x or higher
 
 ### Installation
 
-1. Clone this repository
-2. Install dependencies:
+1. **Clone this repository**
+2. **Ensure correct Node.js version** (if using nvm):
+   ```bash
+   nvm use
+   ```
+3. **Install dependencies**:
    ```bash
    npm install
+   ```
+4. **Test the installation**:
+   ```bash
+   npm test
    ```
 
 3. Create a Discord application:

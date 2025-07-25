@@ -1,3 +1,6 @@
+// Load compatibility fixes first
+require('./utils/compatibility');
+
 const { Client, GatewayIntentBits, Collection, REST, Routes, InteractionResponseType } = require('discord.js');
 require('dotenv').config();
 
