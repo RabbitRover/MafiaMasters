@@ -1,0 +1,23 @@
+{
+  "name": "mafia-masters",
+  "version": "1.0.0",
+  "description": "A Discord bot for playing Mafia games",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["discord", "bot", "mafia", "game"],
+  "author": "RabbitRover",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
