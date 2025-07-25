@@ -5,9 +5,12 @@ A Discord bot for playing Mafia games in your server channels.
 ## Features
 
 - `/start` - Start a new Mafia game session
-- Interactive join/start buttons
+- Interactive join/leave/start buttons
 - Host-controlled game sessions
 - Player management (5 players required)
+- **Player list display** in lobby
+- **Role assignment system** with 5 unique roles
+- **Private role messages** sent via ephemeral messages
 
 ## Setup
 
@@ -61,17 +64,43 @@ npm start
 ## Usage
 
 1. Use `/start` in any channel to begin a new Mafia game
-2. Players click the "Join" button to join the game
-3. Once 5 players have joined, the host can click "Start" to begin
-4. The bot will handle player management and prevent duplicates
+2. Players click the "Join" button to join the game (or "Leave" to leave)
+3. The lobby shows all joined players in real-time
+4. Once 5 players have joined, the host can click "Start" to begin
+5. The bot assigns roles and provides a "Get My Role" button
+6. Players click the button to receive their role privately via ephemeral message
+
+## Available Roles
+
+### Town Roles
+- **🏛️ Mayor** - Double voting power, can reveal for extra influence
+  - *Win Condition*: Eliminate all Mafia and harmful neutrals
+
+### Mafia Roles
+- **🔫 Mafia** - Can kill players at night
+  - *Win Condition*: Achieve numerical superiority over Town
+
+### Neutral Roles
+- **🃏 Jester** - Wants to be lynched to win
+  - *Win Condition*: Get voted out during the day
+- **🛡️ Survivor** - Has protective vests, wins by surviving
+  - *Win Condition*: Survive until the end
+- **⚔️ Executioner** - Must get their assigned target lynched
+  - *Win Condition*: Get your target voted out during the day
+  - *Special*: Has a random target (Jester, Mafia, or Survivor)
 
 ## Current Status
 
 ✅ Basic game lobby functionality
-✅ Player join/leave system
-✅ Host controls
-🚧 Role assignment (coming next)
-🚧 Game mechanics (coming next)
+✅ Player join/leave system with buttons
+✅ **Real-time player list** in lobby
+✅ Host controls (host cannot leave)
+✅ **Role assignment system**
+✅ **5 unique roles**: Mayor, Mafia, Jester, Survivor, Executioner
+✅ **Private role messages** via ephemeral messages
+✅ **Executioner targeting system**
+✅ **Interactive role distribution** with "Get My Role" button
+🚧 Game mechanics and phases (coming next)
 🚧 Rules and role information commands
 
 ## Contributing

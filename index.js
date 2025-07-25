@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Collection, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, REST, Routes, InteractionResponseType } = require('discord.js');
 require('dotenv').config();
 
 // Create a new client instance
@@ -42,7 +42,7 @@ client.on('interactionCreate', async interaction => {
             
             const errorMessage = {
                 content: '❌ There was an error while executing this command!',
-                ephemeral: true
+                flags: 64 // InteractionResponseFlags.Ephemeral
             };
 
             if (interaction.replied || interaction.deferred) {
@@ -55,7 +55,7 @@ client.on('interactionCreate', async interaction => {
         // Handle button interactions
         try {
             // Route button interactions to the start command handler
-            if (interaction.customId === 'join_game' || interaction.customId === 'start_game') {
+            if (interaction.customId === 'join_game' || interaction.customId === 'start_game' || interaction.customId === 'leave_game') {
                 await startCommand.handleButtonInteraction(interaction);
             }
         } catch (error) {
@@ -63,7 +63,7 @@ client.on('interactionCreate', async interaction => {
             
             const errorMessage = {
                 content: '❌ There was an error while processing your action!',
-                ephemeral: true
+                flags: 64 // InteractionResponseFlags.Ephemeral
             };
 
             if (interaction.replied || interaction.deferred) {

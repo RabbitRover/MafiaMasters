@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const GameSession = require('../game/GameSession');
+const { assignRoles, createRoleMessage } = require('../game/roles');
 
 // Store active game sessions (in memory for now)
 const activeSessions = new Map();
@@ -17,7 +18,7 @@ module.exports = {
         if (activeSessions.has(channelId)) {
             return await interaction.reply({
                 content: '❌ There is already an active Mafia game in this channel!',
-                ephemeral: true
+                flags: 64 // Ephemeral
             });
         }
 
@@ -26,7 +27,7 @@ module.exports = {
         activeSessions.set(channelId, gameSession);
 
         // Create the initial embed and buttons
-        const embed = createGameEmbed(gameSession, interaction.user.username);
+        const embed = await createGameEmbed(gameSession, interaction.guild);
         const row = createButtonRow(gameSession);
 
         await interaction.reply({
@@ -44,7 +45,7 @@ module.exports = {
         if (!gameSession) {
             return await interaction.reply({
                 content: '❌ No active game found in this channel.',
-                ephemeral: true
+                flags: 64 // Ephemeral
             });
         }
 
@@ -53,20 +54,54 @@ module.exports = {
             if (gameSession.hasPlayer(userId)) {
                 return await interaction.reply({
                     content: '❌ You have already joined this game!',
-                    ephemeral: true
+                    flags: 64 // Ephemeral
                 });
             }
 
-            const added = gameSession.addPlayer(userId);
+            const added = gameSession.addPlayer(userId, interaction.user.username);
             if (!added) {
                 return await interaction.reply({
                     content: '❌ Unable to join the game. It might be full.',
-                    ephemeral: true
+                    flags: 64 // Ephemeral
                 });
             }
 
             // Update the message with new player count
-            const embed = createGameEmbed(gameSession, interaction.guild.members.cache.get(gameSession.hostId)?.user.username || 'Unknown');
+            const embed = await createGameEmbed(gameSession, interaction.guild);
+            const row = createButtonRow(gameSession);
+
+            await interaction.update({
+                embeds: [embed],
+                components: [row]
+            });
+
+        } else if (interaction.customId === 'leave_game') {
+            // Handle leave button
+            if (!gameSession.hasPlayer(userId)) {
+                return await interaction.reply({
+                    content: '❌ You are not in this game!',
+                    flags: 64 // Ephemeral
+                });
+            }
+
+            // Don't allow host to leave
+            if (gameSession.isHost(userId)) {
+                return await interaction.reply({
+                    content: '❌ The host cannot leave the game! Use `/start` again to create a new game.',
+                    flags: 64 // Ephemeral
+                });
+            }
+
+            const removed = gameSession.removePlayer(userId);
+            if (!removed) {
+                return await interaction.reply({
+                    content: '❌ Unable to leave the game.',
+                    flags: 64 // Ephemeral
+                });
+            }
+
+            // Update the message with new player count
+            const embed = await createGameEmbed(gameSession, interaction.guild);
             const row = createButtonRow(gameSession);
 
             await interaction.update({
@@ -79,27 +114,32 @@ module.exports = {
             if (!gameSession.isHost(userId)) {
                 return await interaction.reply({
                     content: '❌ Only the host can start the game!',
-                    ephemeral: true
+                    flags: 64 // Ephemeral
                 });
             }
 
             if (!gameSession.isReady()) {
                 return await interaction.reply({
                     content: '❌ Need exactly 5 players to start the game!',
-                    ephemeral: true
+                    flags: 64 // Ephemeral
                 });
             }
 
             // Start the game
             gameSession.startGame();
 
+            // Assign roles to all players
+            const playerIds = gameSession.getPlayerIds();
+            const roleAssignments = assignRoles(playerIds);
+            gameSession.assignRoles(roleAssignments);
+
             const embed = new EmbedBuilder()
                 .setTitle('🎭 Mafia Game Started!')
-                .setDescription('The game has begun! Roles are being assigned...')
+                .setDescription('The game has begun! Each player will receive their role assignment privately.')
                 .setColor(0x00ff00)
                 .addFields(
                     { name: '👥 Players', value: `${gameSession.getPlayerCount()}/${gameSession.maxPlayers}`, inline: true },
-                    { name: '🎮 Status', value: 'Game Started', inline: true }
+                    { name: '🎮 Status', value: 'Roles Assigned', inline: true }
                 )
                 .setTimestamp();
 
@@ -108,11 +148,8 @@ module.exports = {
                 components: [] // Remove buttons
             });
 
-            // TODO: Implement role assignment and game logic
-            await interaction.followUp({
-                content: '🚧 Role assignment and game mechanics will be implemented in the next phase!',
-                ephemeral: false
-            });
+            // Send role assignments to each player via ephemeral messages
+            await sendRoleAssignments(interaction, gameSession);
         }
     },
 
@@ -130,7 +167,28 @@ module.exports = {
 /**
  * Create the game embed with current status
  */
-function createGameEmbed(gameSession, hostUsername) {
+async function createGameEmbed(gameSession, guild) {
+    // Get host username
+    let hostUsername = 'Unknown';
+    try {
+        const hostMember = await guild.members.fetch(gameSession.hostId);
+        hostUsername = hostMember.user.username;
+    } catch (error) {
+        console.error('Error fetching host member:', error);
+    }
+
+    // Create joined players list
+    let joinedPlayersList = 'None';
+    if (gameSession.getPlayerCount() > 0) {
+        const playerUsernames = gameSession.getPlayerUsernames();
+        joinedPlayersList = playerUsernames.join(', ');
+
+        // Truncate if too long
+        if (joinedPlayersList.length > 1000) {
+            joinedPlayersList = joinedPlayersList.substring(0, 997) + '...';
+        }
+    }
+
     const embed = new EmbedBuilder()
         .setTitle('🎭 Mafia Game Lobby')
         .setDescription('A new Mafia game is starting! Click "Join" to participate.')
@@ -138,7 +196,8 @@ function createGameEmbed(gameSession, hostUsername) {
         .addFields(
             { name: '👑 Host', value: hostUsername, inline: true },
             { name: '👥 Players', value: `${gameSession.getPlayerCount()}/${gameSession.maxPlayers}`, inline: true },
-            { name: '🎮 Status', value: gameSession.isReady() ? 'Ready to Start!' : 'Waiting for Players', inline: true }
+            { name: '🎮 Status', value: gameSession.isReady() ? 'Ready to Start!' : 'Waiting for Players', inline: true },
+            { name: '📋 Joined Players', value: joinedPlayersList, inline: false }
         )
         .setFooter({ text: 'Need 5 players to start the game' })
         .setTimestamp();
@@ -162,15 +221,113 @@ function createButtonRow(gameSession) {
                 .setEmoji('🚀')
         );
     } else {
-        // Show join button when waiting for players
+        // Show join and leave buttons when waiting for players
         row.addComponents(
             new ButtonBuilder()
                 .setCustomId('join_game')
                 .setLabel('Join Game')
                 .setStyle(ButtonStyle.Primary)
+                .setEmoji('👋'),
+            new ButtonBuilder()
+                .setCustomId('leave_game')
+                .setLabel('Leave Game')
+                .setStyle(ButtonStyle.Secondary)
                 .setEmoji('👋')
+                .setDisabled(gameSession.getPlayerCount() === 0) // Disable if no players
         );
     }
 
     return row;
+}
+
+/**
+ * Send role assignments to all players via ephemeral messages
+ * @param {Interaction} interaction - The Discord interaction
+ * @param {GameSession} gameSession - The game session
+ */
+async function sendRoleAssignments(interaction, gameSession) {
+    const roleAssignments = gameSession.getAllRoleAssignments();
+
+    // Create a collector to handle ephemeral role messages
+    const filter = (buttonInteraction) => {
+        return buttonInteraction.customId === 'get_role' &&
+               gameSession.hasPlayer(buttonInteraction.user.id);
+    };
+
+    // Send a follow-up message with a button for players to get their roles
+    const roleButton = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('get_role')
+                .setLabel('Get My Role')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('🎭')
+        );
+
+    const roleMessage = await interaction.followUp({
+        content: '🎭 **Roles have been assigned!**\n\n' +
+                '**Players:** Click the button below to receive your role privately.\n' +
+                '⚠️ **Only you will see your role information!**',
+        components: [roleButton],
+        flags: 0 // Public message
+    });
+
+    // Create collector for role button clicks
+    const collector = roleMessage.createMessageComponentCollector({
+        filter,
+        time: 300000 // 5 minutes
+    });
+
+    collector.on('collect', async (buttonInteraction) => {
+        const playerId = buttonInteraction.user.id;
+        const assignment = roleAssignments[playerId];
+
+        if (!assignment) {
+            return await buttonInteraction.reply({
+                content: '❌ No role assignment found for you!',
+                flags: 64 // Ephemeral
+            });
+        }
+
+        // Get target username if this player is the Executioner
+        let targetUsername = null;
+        if (assignment.target) {
+            targetUsername = gameSession.getPlayerUsername(assignment.target);
+        }
+
+        // Create role message embed
+        const roleEmbed = createRoleMessage(assignment, targetUsername);
+
+        // Send ephemeral role message
+        await buttonInteraction.reply({
+            embeds: [new EmbedBuilder()
+                .setTitle(roleEmbed.title)
+                .setDescription(roleEmbed.description)
+                .setColor(roleEmbed.color)
+                .setFooter(roleEmbed.footer)
+                .setTimestamp()
+            ],
+            flags: 64 // Ephemeral
+        });
+    });
+
+    collector.on('end', () => {
+        // Disable the button after 5 minutes
+        const disabledButton = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('get_role')
+                    .setLabel('Get My Role')
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('🎭')
+                    .setDisabled(true)
+            );
+
+        roleMessage.edit({
+            content: '🎭 **Roles have been assigned!**\n\n' +
+                    '**Players:** Click the button below to receive your role privately.\n' +
+                    '⚠️ **Role assignment period has ended.**',
+            components: [disabledButton]
+        }).catch(console.error);
+    });
 }
