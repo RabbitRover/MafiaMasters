@@ -5,7 +5,7 @@ class GameSession {
         this.players = new Set(); // Use Set to prevent duplicate players
         this.playerUsernames = new Map(); // Store player usernames: playerId -> username
         this.maxPlayers = 5;
-        this.gameState = 'waiting'; // waiting, ready, started, roles_assigned, day_phase, game_ended
+        this.gameState = 'waiting'; // waiting, ready, started, roles_assigned, day_phase, night_phase, game_ended
         this.createdAt = new Date();
         this.roleAssignments = {}; // Store role assignments: { playerId: { role, roleInfo, target?, targetRole? } }
 
@@ -15,6 +15,10 @@ class GameSession {
         this.alivePlayers = new Set(); // Track alive players
         this.gameWinner = null; // Store game winner
         this.eliminatedPlayer = null; // Store eliminated player info
+
+        // Night phase system
+        this.nightKillTarget = null; // Player marked for elimination by Mafia
+        this.dayNumber = 1; // Track current day number
     }
 
     /**
@@ -414,6 +418,144 @@ class GameSession {
      */
     getGameWinner() {
         return this.gameWinner;
+    }
+
+    /**
+     * Start the night phase
+     */
+    startNightPhase() {
+        this.gameState = 'night_phase';
+        this.nightKillTarget = null;
+    }
+
+    /**
+     * Check if game is in night phase
+     * @returns {boolean}
+     */
+    isNightPhase() {
+        return this.gameState === 'night_phase';
+    }
+
+    /**
+     * Get the Mafia player ID
+     * @returns {string|null} - Mafia's user ID or null if not found
+     */
+    getMafiaId() {
+        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+            if (assignment.role === 'MAFIA' && this.alivePlayers.has(playerId)) {
+                return playerId;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Set the night kill target (Mafia action)
+     * @param {string} targetId - ID of the player to kill
+     * @returns {boolean} - True if target was set successfully
+     */
+    setNightKillTarget(targetId) {
+        if (!this.alivePlayers.has(targetId)) {
+            return false; // Can't kill dead players
+        }
+
+        // Check if target is Executioner (cannot be killed at night)
+        const targetRole = this.getPlayerRole(targetId);
+        if (targetRole?.role === 'EXECUTIONER') {
+            return false; // Executioner cannot be killed at night
+        }
+
+        this.nightKillTarget = targetId;
+        return true;
+    }
+
+    /**
+     * Get the current night kill target
+     * @returns {string|null} - Target ID or null if no target set
+     */
+    getNightKillTarget() {
+        return this.nightKillTarget;
+    }
+
+    /**
+     * Process night phase elimination and role changes
+     * @returns {Object} - Result object with elimination info and role changes
+     */
+    processNightElimination() {
+        if (!this.nightKillTarget) {
+            return {
+                eliminated: null,
+                reason: 'no_kill',
+                roleChanges: [],
+                gameEnded: false
+            };
+        }
+
+        const eliminatedId = this.nightKillTarget;
+        const eliminatedRole = this.getPlayerRole(eliminatedId);
+        const eliminatedUsername = this.getPlayerUsername(eliminatedId);
+
+        // Remove player from alive players
+        this.alivePlayers.delete(eliminatedId);
+
+        // Check if eliminated player was an Executioner's target
+        const roleChanges = [];
+        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+            if (assignment.role === 'EXECUTIONER' && assignment.target === eliminatedId) {
+                // Convert Executioner to Jester
+                this.convertExecutionerToJester(playerId);
+                roleChanges.push({
+                    playerId: playerId,
+                    username: this.getPlayerUsername(playerId),
+                    oldRole: 'EXECUTIONER',
+                    newRole: 'JESTER',
+                    reason: 'Target was killed at night'
+                });
+            }
+        }
+
+        return {
+            eliminated: {
+                id: eliminatedId,
+                username: eliminatedUsername,
+                role: eliminatedRole.role,
+                roleInfo: eliminatedRole.roleInfo
+            },
+            reason: 'killed_by_mafia',
+            roleChanges: roleChanges,
+            gameEnded: false // Night kills don't trigger immediate wins
+        };
+    }
+
+    /**
+     * Convert an Executioner to Jester
+     * @param {string} executionerId - ID of the Executioner to convert
+     */
+    convertExecutionerToJester(executionerId) {
+        if (this.roleAssignments[executionerId]?.role === 'EXECUTIONER') {
+            const { getRole } = require('./roles');
+            this.roleAssignments[executionerId] = {
+                role: 'JESTER',
+                roleInfo: getRole('JESTER'),
+                target: null, // Remove target
+                targetRole: null
+            };
+        }
+    }
+
+    /**
+     * Get current day number
+     * @returns {number}
+     */
+    getDayNumber() {
+        return this.dayNumber;
+    }
+
+    /**
+     * Increment day number (called when starting new day)
+     */
+    incrementDay() {
+        this.dayNumber++;
     }
 }
 

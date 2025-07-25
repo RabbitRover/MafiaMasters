@@ -13,6 +13,9 @@ A Discord bot for playing Mafia games in your server channels.
 - **Private role messages** sent via ephemeral messages
 - **Day phase voting system** with elimination mechanics
 - **Mayor reveal functionality** with double voting power
+- **Night phase mechanics** with Mafia kills
+- **Executioner protection** (cannot be killed at night)
+- **Role conversion system** (Executioner → Jester)
 - **Win condition checking** (Jester, Executioner)
 
 ## Setup
@@ -95,6 +98,10 @@ npm start
 8. Players vote to eliminate someone (Mayor can reveal for double votes)
 9. Host can end the day phase, or it auto-ends after 10 minutes
 10. Elimination results are announced with win condition checks
+11. **Night Phase begins** - Mafia receives kill options via ephemeral message
+12. Mafia selects target (Executioner cannot be killed)
+13. Night results announced, role changes processed
+14. **Next day begins** - cycle continues until win condition met
 
 ## Available Roles
 
@@ -114,6 +121,26 @@ npm start
 - **⚔️ Executioner** - Must get their assigned target lynched
   - *Win Condition*: Get your target voted out during the day
   - *Special*: Has a random target (Jester, Mafia, or Survivor)
+  - *Protection*: Cannot be killed at night
+  - *Role Change*: Becomes Jester if target dies at night
+
+## Night Phase Mechanics
+
+### Mafia Actions
+- **🔪 Kill Selection**: Mafia receives ephemeral message with kill options
+- **🛡️ Executioner Protection**: Executioner cannot be selected as target
+- **⏭️ Skip Option**: Mafia can choose not to kill anyone
+- **⏰ Time Limit**: 2 minutes to make decision
+
+### Role Conversions
+- **Executioner → Jester**: If Executioner's target is killed at night
+- **Private Notification**: Converted player receives new role information
+- **Immediate Effect**: Role change takes effect immediately
+
+### Night Results
+- **💀 Death Announcement**: Eliminated player's role is revealed
+- **🔄 Role Changes**: Any conversions are announced publicly
+- **🌅 Dawn Transition**: Automatic progression to next day phase
 
 ## Current Status
 
@@ -131,7 +158,12 @@ npm start
 ✅ **Elimination processing** with tie handling
 ✅ **Win condition checking** (Jester, Executioner wins)
 ✅ **Host controls** for day phase management
-🚧 Night phase mechanics (coming next)
+✅ **Night phase mechanics** with Mafia kill system
+✅ **Executioner protection** (immune to night kills)
+✅ **Role conversion system** (Executioner → Jester when target dies)
+✅ **Day/Night cycle** with automatic progression
+✅ **Complete game loop** from start to finish
+🚧 Additional win conditions (Town/Mafia victory)
 🚧 Rules and role information commands
 
 ## Contributing
