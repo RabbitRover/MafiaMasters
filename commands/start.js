@@ -311,7 +311,7 @@ async function sendRoleAssignments(interaction, gameSession) {
         });
     });
 
-    collector.on('end', () => {
+    collector.on('end', async () => {
         // Disable the button after 5 minutes
         const disabledButton = new ActionRowBuilder()
             .addComponents(
@@ -323,11 +323,313 @@ async function sendRoleAssignments(interaction, gameSession) {
                     .setDisabled(true)
             );
 
-        roleMessage.edit({
+        await roleMessage.edit({
             content: '🎭 **Roles have been assigned!**\n\n' +
                     '**Players:** Click the button below to receive your role privately.\n' +
                     '⚠️ **Role assignment period has ended.**',
             components: [disabledButton]
         }).catch(console.error);
+
+        // Start the day phase
+        await startDayPhase(interaction, gameSession);
     });
+}
+
+/**
+ * Start the day phase with voting
+ * @param {Interaction} interaction - The Discord interaction
+ * @param {GameSession} gameSession - The game session
+ */
+async function startDayPhase(interaction, gameSession) {
+    gameSession.startDayPhase();
+
+    const dayEmbed = createDayPhaseEmbed(gameSession);
+    const voteButtons = createVoteButtons(gameSession);
+
+    const dayMessage = await interaction.followUp({
+        embeds: [dayEmbed],
+        components: voteButtons,
+        flags: 0 // Public message
+    });
+
+    // Create collector for voting buttons
+    const filter = (buttonInteraction) => {
+        return gameSession.hasPlayer(buttonInteraction.user.id) &&
+               gameSession.getAlivePlayers().has(buttonInteraction.user.id);
+    };
+
+    const collector = dayMessage.createMessageComponentCollector({
+        filter,
+        time: 600000 // 10 minutes
+    });
+
+    collector.on('collect', async (buttonInteraction) => {
+        await handleDayPhaseInteraction(buttonInteraction, gameSession, dayMessage);
+    });
+
+    collector.on('end', async () => {
+        // Auto-end day phase if time runs out
+        if (gameSession.isDayPhase()) {
+            await processDayPhaseEnd(interaction, gameSession, dayMessage);
+        }
+    });
+}
+
+/**
+ * Handle day phase button interactions
+ * @param {ButtonInteraction} interaction - The button interaction
+ * @param {GameSession} gameSession - The game session
+ * @param {Message} dayMessage - The day phase message
+ */
+async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
+    const userId = interaction.user.id;
+    const customId = interaction.customId;
+
+    if (customId.startsWith('vote_')) {
+        // Handle voting
+        const targetId = customId.replace('vote_', '');
+
+        if (gameSession.castVote(userId, targetId)) {
+            const targetUsername = gameSession.getPlayerUsername(targetId);
+            await interaction.reply({
+                content: `✅ You voted for **${targetUsername}**`,
+                flags: 64 // Ephemeral
+            });
+        } else {
+            await interaction.reply({
+                content: '❌ Unable to cast vote',
+                flags: 64 // Ephemeral
+            });
+        }
+
+    } else if (customId === 'reveal_mayor') {
+        // Handle Mayor reveal
+        if (gameSession.revealMayor(userId)) {
+            await interaction.reply({
+                content: `🏛️ **${interaction.user.username}** has revealed as the Mayor! Their votes now count as 2!`,
+                flags: 0 // Public message
+            });
+        } else {
+            await interaction.reply({
+                content: '❌ Only the Mayor can use this button',
+                flags: 64 // Ephemeral
+            });
+        }
+
+    } else if (customId === 'end_day') {
+        // Handle day phase end (host only)
+        if (gameSession.isHost(userId)) {
+            await processDayPhaseEnd(interaction, gameSession, dayMessage);
+            return; // Don't update the message again
+        } else {
+            await interaction.reply({
+                content: '❌ Only the host can end the day phase',
+                flags: 64 // Ephemeral
+            });
+        }
+    }
+
+    // Update the day phase message with current vote counts
+    if (!gameSession.hasGameEnded()) {
+        const updatedEmbed = createDayPhaseEmbed(gameSession);
+        const updatedButtons = createVoteButtons(gameSession);
+
+        await dayMessage.edit({
+            embeds: [updatedEmbed],
+            components: updatedButtons
+        }).catch(console.error);
+    }
+}
+
+/**
+ * Create the day phase embed with vote counts
+ * @param {GameSession} gameSession - The game session
+ * @returns {EmbedBuilder} - The day phase embed
+ */
+function createDayPhaseEmbed(gameSession) {
+    const voteCounts = gameSession.getVoteCounts();
+    const alivePlayers = gameSession.getAlivePlayers();
+
+    let voteCountText = '';
+    for (const playerId of alivePlayers) {
+        const username = gameSession.getPlayerUsername(playerId);
+        const votes = voteCounts.get(playerId) || 0;
+        voteCountText += `**${username}**: ${votes} vote${votes !== 1 ? 's' : ''}\n`;
+    }
+
+    if (!voteCountText) {
+        voteCountText = 'No votes cast yet';
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle('☀️ Day Phase - Voting Time!')
+        .setDescription('Vote to eliminate a player. The player with the most votes will be eliminated.')
+        .setColor(0xffaa00)
+        .addFields(
+            { name: '🗳️ Current Votes', value: voteCountText, inline: false },
+            { name: '👥 Alive Players', value: `${alivePlayers.size} players remaining`, inline: true }
+        )
+        .setFooter({ text: 'Vote wisely! Majority rules.' })
+        .setTimestamp();
+
+    // Add Mayor status if revealed
+    if (gameSession.isMayorRevealed()) {
+        const mayorId = gameSession.getMayorId();
+        const mayorUsername = gameSession.getPlayerUsername(mayorId);
+        embed.addFields({
+            name: '🏛️ Mayor Revealed',
+            value: `**${mayorUsername}** is the Mayor (votes count as 2)`,
+            inline: false
+        });
+    }
+
+    return embed;
+}
+
+/**
+ * Create vote buttons for all alive players
+ * @param {GameSession} gameSession - The game session
+ * @returns {Array<ActionRowBuilder>} - Array of button rows
+ */
+function createVoteButtons(gameSession) {
+    const alivePlayers = Array.from(gameSession.getAlivePlayers());
+    const rows = [];
+
+    // Create vote buttons (max 5 buttons per row)
+    const voteButtons = [];
+    for (const playerId of alivePlayers) {
+        const username = gameSession.getPlayerUsername(playerId);
+        voteButtons.push(
+            new ButtonBuilder()
+                .setCustomId(`vote_${playerId}`)
+                .setLabel(`Vote ${username}`)
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('🗳️')
+        );
+    }
+
+    // Split buttons into rows (max 5 per row)
+    for (let i = 0; i < voteButtons.length; i += 5) {
+        const row = new ActionRowBuilder();
+        row.addComponents(voteButtons.slice(i, i + 5));
+        rows.push(row);
+    }
+
+    // Add special action buttons in a separate row
+    const actionRow = new ActionRowBuilder();
+
+    // Mayor reveal button (only if Mayor hasn't revealed yet)
+    if (!gameSession.isMayorRevealed()) {
+        actionRow.addComponents(
+            new ButtonBuilder()
+                .setCustomId('reveal_mayor')
+                .setLabel('Reveal as Mayor')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('🏛️')
+        );
+    }
+
+    // End day button (host only)
+    actionRow.addComponents(
+        new ButtonBuilder()
+            .setCustomId('end_day')
+            .setLabel('End Day Phase')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('⏰')
+    );
+
+    rows.push(actionRow);
+
+    return rows;
+}
+
+/**
+ * Process the end of day phase and handle elimination
+ * @param {Interaction} interaction - The Discord interaction
+ * @param {GameSession} gameSession - The game session
+ * @param {Message} dayMessage - The day phase message
+ */
+async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
+    const eliminationResult = gameSession.processElimination();
+
+    // Disable all buttons
+    const disabledRows = createVoteButtons(gameSession).map(row => {
+        const newRow = new ActionRowBuilder();
+        row.components.forEach(button => {
+            newRow.addComponents(
+                ButtonBuilder.from(button).setDisabled(true)
+            );
+        });
+        return newRow;
+    });
+
+    // Update the day message with disabled buttons
+    await dayMessage.edit({
+        embeds: [createDayPhaseEmbed(gameSession)],
+        components: disabledRows
+    }).catch(console.error);
+
+    // Create elimination result embed
+    let resultEmbed;
+
+    if (eliminationResult.eliminated) {
+        const eliminated = eliminationResult.eliminated;
+        resultEmbed = new EmbedBuilder()
+            .setTitle('⚰️ Elimination Results')
+            .setDescription(`**${eliminated.username}** has been eliminated!`)
+            .setColor(0xff0000)
+            .addFields(
+                { name: '🎭 Role Revealed', value: `${eliminated.roleInfo.emoji} **${eliminated.roleInfo.name}**`, inline: true },
+                { name: '⚖️ Alignment', value: eliminated.roleInfo.alignment, inline: true }
+            )
+            .setTimestamp();
+
+        // Check for game end
+        if (eliminationResult.gameEnded) {
+            const winner = eliminationResult.winner;
+            const winReason = eliminationResult.winReason;
+
+            resultEmbed.addFields({
+                name: '🏆 Game Over!',
+                value: `**${winner}** wins!\n*${winReason}*`,
+                inline: false
+            });
+
+            resultEmbed.setColor(0x00ff00);
+        }
+
+    } else {
+        // No elimination (tie or no votes)
+        const reason = eliminationResult.reason === 'tie' ? 'Vote tie' : 'No votes cast';
+        resultEmbed = new EmbedBuilder()
+            .setTitle('🤝 No Elimination')
+            .setDescription(`${reason} - no one was eliminated today.`)
+            .setColor(0xffaa00)
+            .setTimestamp();
+
+        if (eliminationResult.reason === 'tie' && eliminationResult.tiedPlayers.length > 0) {
+            const tiedNames = eliminationResult.tiedPlayers
+                .map(id => gameSession.getPlayerUsername(id))
+                .join(', ');
+            resultEmbed.addFields({
+                name: '🤝 Tied Players',
+                value: tiedNames,
+                inline: false
+            });
+        }
+    }
+
+    // Send elimination results
+    await interaction.followUp({
+        embeds: [resultEmbed],
+        flags: 0 // Public message
+    });
+
+    // If game ended, clean up the session
+    if (eliminationResult.gameEnded) {
+        // Remove the game session after a delay to allow players to see results
+        setTimeout(() => {
+            activeSessions.delete(gameSession.channelId);
+        }, 30000); // 30 seconds
+    }
 }

@@ -11,6 +11,9 @@ A Discord bot for playing Mafia games in your server channels.
 - **Player list display** in lobby
 - **Role assignment system** with 5 unique roles
 - **Private role messages** sent via ephemeral messages
+- **Day phase voting system** with elimination mechanics
+- **Mayor reveal functionality** with double voting power
+- **Win condition checking** (Jester, Executioner)
 
 ## Setup
 
@@ -88,6 +91,10 @@ npm start
 4. Once 5 players have joined, the host can click "Start" to begin
 5. The bot assigns roles and provides a "Get My Role" button
 6. Players click the button to receive their role privately via ephemeral message
+7. **Day Phase begins** with voting buttons for each player
+8. Players vote to eliminate someone (Mayor can reveal for double votes)
+9. Host can end the day phase, or it auto-ends after 10 minutes
+10. Elimination results are announced with win condition checks
 
 ## Available Roles
 
@@ -119,7 +126,12 @@ npm start
 ✅ **Private role messages** via ephemeral messages
 ✅ **Executioner targeting system**
 ✅ **Interactive role distribution** with "Get My Role" button
-🚧 Game mechanics and phases (coming next)
+✅ **Day phase voting system** with live vote counts
+✅ **Mayor reveal mechanics** (double voting power)
+✅ **Elimination processing** with tie handling
+✅ **Win condition checking** (Jester, Executioner wins)
+✅ **Host controls** for day phase management
+🚧 Night phase mechanics (coming next)
 🚧 Rules and role information commands
 
 ## Contributing
