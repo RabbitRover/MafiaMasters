@@ -88,10 +88,10 @@ function getRole(roleKey) {
 }
 
 /**
- * Get possible targets for Executioner
+ * Get possible target roles for Executioner
  * @returns {Array<string>} Array of role keys that can be Executioner targets
  */
-function getExecutionerTargets() {
+function getExecutionerTargetRoles() {
     return ['JESTER', 'MAFIA', 'SURVIVOR'];
 }
 
@@ -107,71 +107,68 @@ function assignRoles(playerIds) {
 
     // Get all available roles
     const availableRoles = getAllRoles();
-    
+
     // Shuffle the roles array
     const shuffledRoles = [...availableRoles].sort(() => Math.random() - 0.5);
-    
+
     // Create role assignments
     const assignments = {};
-    const executionerTargets = getExecutionerTargets();
-    
+    const executionerTargetRoles = getExecutionerTargetRoles();
+
     for (let i = 0; i < playerIds.length; i++) {
         const playerId = playerIds[i];
         const roleKey = shuffledRoles[i];
-        
+
         assignments[playerId] = {
             role: roleKey,
             roleInfo: getRole(roleKey)
         };
-        
-        // If this player is the Executioner, assign them a target
+
+        // If this player is the Executioner, assign them a target role
         if (roleKey === 'EXECUTIONER') {
-            // Find players with roles that can be targets
-            const possibleTargets = playerIds.filter((id, index) => {
-                const targetRole = shuffledRoles[index];
-                return executionerTargets.includes(targetRole) && id !== playerId;
-            });
-            
-            if (possibleTargets.length > 0) {
-                // Randomly select a target
-                const targetId = possibleTargets[Math.floor(Math.random() * possibleTargets.length)];
-                assignments[playerId].target = targetId;
-                assignments[playerId].targetRole = shuffledRoles[playerIds.indexOf(targetId)];
+            // Find roles that can be targets (excluding Executioner itself)
+            const availableTargetRoles = shuffledRoles.filter(role =>
+                executionerTargetRoles.includes(role)
+            );
+
+            if (availableTargetRoles.length > 0) {
+                // Randomly select a target role
+                const targetRole = availableTargetRoles[Math.floor(Math.random() * availableTargetRoles.length)];
+                assignments[playerId].targetRole = targetRole;
+                assignments[playerId].targetRoleInfo = getRole(targetRole);
             }
         }
     }
-    
+
     return assignments;
 }
 
 /**
  * Create a formatted role message for a player
  * @param {Object} assignment - Player's role assignment
- * @param {string} targetUsername - Username of target (if applicable)
  * @returns {Object} Formatted embed for the role message
  */
-function createRoleMessage(assignment, targetUsername = null) {
-    const { role, roleInfo, target, targetRole } = assignment;
-    
+function createRoleMessage(assignment) {
+    const { role, roleInfo, targetRole, targetRoleInfo } = assignment;
+
     let description = `${roleInfo.emoji} **${roleInfo.description}**\n\n`;
-    
+
     // Add win condition
     description += `**🎯 Win Condition:**\n${roleInfo.winCondition}\n\n`;
-    
+
     // Add powers
     description += `**⚡ Powers/Effects:**\n`;
     roleInfo.powers.forEach(power => {
         description += `• ${power}\n`;
     });
-    
+
     // Add target information for Executioner
-    if (role === 'EXECUTIONER' && target && targetUsername) {
-        const targetRoleInfo = getRole(targetRole);
-        description += `\n**🎯 Your Target:**\n`;
-        description += `${targetRoleInfo.emoji} **${targetUsername}** (${targetRoleInfo.name})\n`;
-        description += `You must get them lynched to win!`;
+    if (role === 'EXECUTIONER' && targetRole && targetRoleInfo) {
+        description += `\n**🎯 Your Target Role:**\n`;
+        description += `${targetRoleInfo.emoji} **${targetRoleInfo.name}**\n`;
+        description += `You must get someone with this role lynched to win!`;
     }
-    
+
     return {
         title: `${roleInfo.emoji} You are the ${roleInfo.name}!`,
         description: description,
@@ -199,7 +196,7 @@ module.exports = {
     ROLES,
     getAllRoles,
     getRole,
-    getExecutionerTargets,
+    getExecutionerTargetRoles,
     assignRoles,
     createRoleMessage
 };

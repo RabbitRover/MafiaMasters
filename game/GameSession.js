@@ -4,10 +4,11 @@ class GameSession {
         this.channelId = channelId;
         this.players = new Set(); // Use Set to prevent duplicate players
         this.playerUsernames = new Map(); // Store player usernames: playerId -> username
+        this.playerDisplayNames = new Map(); // Store player display names: playerId -> displayName
         this.maxPlayers = 5;
         this.gameState = 'waiting'; // waiting, ready, started, roles_assigned, day_phase, night_phase, game_ended
         this.createdAt = new Date();
-        this.roleAssignments = {}; // Store role assignments: { playerId: { role, roleInfo, target?, targetRole? } }
+        this.roleAssignments = {}; // Store role assignments: { playerId: { role, roleInfo, targetRole?, targetRoleInfo? } }
 
         // Day phase voting system
         this.votes = new Map(); // voterId -> targetId
@@ -25,9 +26,10 @@ class GameSession {
      * Add a player to the game session
      * @param {string} userId - Discord user ID
      * @param {string} username - Discord username
+     * @param {string} displayName - Discord display name
      * @returns {boolean} - True if player was added, false if already in game
      */
-    addPlayer(userId, username) {
+    addPlayer(userId, username, displayName) {
         if (this.players.has(userId)) {
             return false; // Player already joined
         }
@@ -38,6 +40,7 @@ class GameSession {
 
         this.players.add(userId);
         this.playerUsernames.set(userId, username);
+        this.playerDisplayNames.set(userId, displayName || username);
 
         // Update game state if we have enough players
         if (this.players.size >= this.maxPlayers) {
@@ -56,6 +59,7 @@ class GameSession {
         const removed = this.players.delete(userId);
         if (removed) {
             this.playerUsernames.delete(userId);
+            this.playerDisplayNames.delete(userId);
         }
 
         // Update game state if we no longer have enough players
@@ -174,6 +178,15 @@ class GameSession {
     }
 
     /**
+     * Get display name for a specific player
+     * @param {string} userId - Discord user ID
+     * @returns {string|null} Display name or null if not found
+     */
+    getPlayerDisplayName(userId) {
+        return this.playerDisplayNames.get(userId) || this.getPlayerUsername(userId) || null;
+    }
+
+    /**
      * Start the day phase
      */
     startDayPhase() {
@@ -221,13 +234,13 @@ class GameSession {
             voteCounts.set(playerId, 0);
         }
 
-        // Count votes (Mayor gets double votes if revealed)
+        // Count votes (Mayor gets 4 votes if revealed)
         for (const [voterId, targetId] of this.votes) {
             const currentCount = voteCounts.get(targetId) || 0;
             const voterRole = this.getPlayerRole(voterId);
 
-            // Mayor gets double votes if revealed, otherwise normal vote
-            const voteWeight = (voterRole?.role === 'MAYOR' && this.mayorRevealed) ? 2 : 1;
+            // Mayor gets 4 votes if revealed, otherwise normal vote
+            const voteWeight = (voterRole?.role === 'MAYOR' && this.mayorRevealed) ? 4 : 1;
             voteCounts.set(targetId, currentCount + voteWeight);
         }
 
@@ -372,22 +385,22 @@ class GameSession {
                 winners: [{
                     type: 'Jester',
                     playerId: eliminatedId,
-                    username: this.getPlayerUsername(eliminatedId),
+                    username: this.getPlayerDisplayName(eliminatedId),
                     reason: 'Jester was lynched'
                 }],
                 winType: 'jester_lynched'
             };
         }
 
-        // Check if Executioner's target was eliminated (Executioner wins immediately)
+        // Check if Executioner's target role was eliminated (Executioner wins immediately)
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
-            if (assignment.role === 'EXECUTIONER' && assignment.target === eliminatedId) {
+            if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
                 // Executioner wins, check if Survivor also wins (if alive)
                 const winners = [{
                     type: 'Executioner',
                     playerId: playerId,
-                    username: this.getPlayerUsername(playerId),
-                    reason: 'Executioner got their target lynched'
+                    username: this.getPlayerDisplayName(playerId),
+                    reason: 'Executioner got their target role lynched'
                 }];
 
                 // Add Survivor as co-winner if alive
@@ -396,7 +409,7 @@ class GameSession {
                     winners.push({
                         type: 'Survivor',
                         playerId: survivorId,
-                        username: this.getPlayerUsername(survivorId),
+                        username: this.getPlayerDisplayName(survivorId),
                         reason: 'Survivor was alive at game end'
                     });
                 }
@@ -417,7 +430,7 @@ class GameSession {
                 const winners = [{
                     type: 'Mayor',
                     playerId: mayorId,
-                    username: this.getPlayerUsername(mayorId),
+                    username: this.getPlayerDisplayName(mayorId),
                     reason: 'Mayor eliminated the Mafia'
                 }];
 
@@ -427,7 +440,7 @@ class GameSession {
                     winners.push({
                         type: 'Survivor',
                         playerId: survivorId,
-                        username: this.getPlayerUsername(survivorId),
+                        username: this.getPlayerDisplayName(survivorId),
                         reason: 'Survivor was alive at game end'
                     });
                 }
@@ -468,7 +481,7 @@ class GameSession {
                 const winners = [{
                     type: 'Mafia',
                     playerId: mafiaId,
-                    username: this.getPlayerUsername(mafiaId),
+                    username: this.getPlayerDisplayName(mafiaId),
                     reason: 'Mafia killed the Mayor'
                 }];
 
@@ -478,7 +491,7 @@ class GameSession {
                     winners.push({
                         type: 'Survivor',
                         playerId: survivorId,
-                        username: this.getPlayerUsername(survivorId),
+                        username: this.getPlayerDisplayName(survivorId),
                         reason: 'Survivor was alive at game end'
                     });
                 }
@@ -608,18 +621,18 @@ class GameSession {
         // Remove player from alive players
         this.alivePlayers.delete(eliminatedId);
 
-        // Check if eliminated player was an Executioner's target
+        // Check if eliminated player's role was an Executioner's target
         const roleChanges = [];
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
-            if (assignment.role === 'EXECUTIONER' && assignment.target === eliminatedId) {
+            if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
                 // Convert Executioner to Jester
                 this.convertExecutionerToJester(playerId);
                 roleChanges.push({
                     playerId: playerId,
-                    username: this.getPlayerUsername(playerId),
+                    username: this.getPlayerDisplayName(playerId),
                     oldRole: 'EXECUTIONER',
                     newRole: 'JESTER',
-                    reason: 'Target was killed at night'
+                    reason: 'Target role was killed at night'
                 });
             }
         }
@@ -716,14 +729,12 @@ class GameSession {
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
             playersWithRoles.push({
                 id: playerId,
-                username: this.getPlayerUsername(playerId),
+                username: this.getPlayerDisplayName(playerId),
                 role: assignment.role,
                 roleInfo: assignment.roleInfo,
                 isAlive: this.alivePlayers.has(playerId),
-                target: assignment.target ? {
-                    id: assignment.target,
-                    username: this.getPlayerUsername(assignment.target)
-                } : null
+                targetRole: assignment.targetRole || null,
+                targetRoleInfo: assignment.targetRoleInfo || null
             });
         }
 
@@ -745,6 +756,7 @@ class GameSession {
         this.roleAssignments = {};
         this.players.clear();
         this.playerUsernames.clear();
+        this.playerDisplayNames.clear();
     }
 }
 

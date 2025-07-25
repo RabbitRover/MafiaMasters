@@ -58,7 +58,7 @@ module.exports = {
                 });
             }
 
-            const added = gameSession.addPlayer(userId, interaction.user.username);
+            const added = gameSession.addPlayer(userId, interaction.user.username, interaction.user.displayName);
             if (!added) {
                 return await interaction.reply({
                     content: '❌ Unable to join the game. It might be full.',
@@ -289,14 +289,8 @@ async function sendRoleAssignments(interaction, gameSession) {
             });
         }
 
-        // Get target username if this player is the Executioner
-        let targetUsername = null;
-        if (assignment.target) {
-            targetUsername = gameSession.getPlayerUsername(assignment.target);
-        }
-
         // Create role message embed
-        const roleEmbed = createRoleMessage(assignment, targetUsername);
+        const roleEmbed = createRoleMessage(assignment);
 
         // Send ephemeral role message
         await buttonInteraction.reply({
@@ -390,9 +384,9 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         const targetId = customId.replace('vote_', '');
 
         if (gameSession.castVote(userId, targetId)) {
-            const targetUsername = gameSession.getPlayerUsername(targetId);
+            const targetDisplayName = gameSession.getPlayerDisplayName(targetId);
             await interaction.reply({
-                content: `✅ You voted for **${targetUsername}**`,
+                content: `✅ You voted for **${targetDisplayName}**`,
                 flags: 64 // Ephemeral
             });
         } else {
@@ -406,7 +400,7 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         // Handle Mayor reveal
         if (gameSession.revealMayor(userId)) {
             await interaction.reply({
-                content: `🏛️ **${interaction.user.username}** has revealed as the Mayor! Their votes now count as 2!`,
+                content: `🏛️ **${interaction.user.displayName || interaction.user.username}** has revealed as the Mayor! Their votes now count as 4!`,
                 flags: 0 // Public message
             });
         } else {
@@ -419,6 +413,12 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
     } else if (customId === 'end_day') {
         // Handle day phase end (host only)
         if (gameSession.isHost(userId)) {
+            // Reply to the interaction first
+            await interaction.reply({
+                content: '⏰ Ending day phase...',
+                flags: 64 // Ephemeral
+            });
+
             await processDayPhaseEnd(interaction, gameSession, dayMessage);
             return; // Don't update the message again
         } else {
@@ -448,17 +448,33 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
  */
 function createDayPhaseEmbed(gameSession) {
     const voteCounts = gameSession.getVoteCounts();
+    const votes = gameSession.getVotes();
     const alivePlayers = gameSession.getAlivePlayers();
 
+    // Create vote count display
     let voteCountText = '';
     for (const playerId of alivePlayers) {
-        const username = gameSession.getPlayerUsername(playerId);
-        const votes = voteCounts.get(playerId) || 0;
-        voteCountText += `**${username}**: ${votes} vote${votes !== 1 ? 's' : ''}\n`;
+        const displayName = gameSession.getPlayerDisplayName(playerId);
+        const voteCount = voteCounts.get(playerId) || 0;
+        voteCountText += `**${displayName}**: ${voteCount} vote${voteCount !== 1 ? 's' : ''}\n`;
     }
 
     if (!voteCountText) {
         voteCountText = 'No votes cast yet';
+    }
+
+    // Create vote details display (who voted for whom)
+    let voteDetailsText = '';
+    if (votes.size > 0) {
+        for (const [voterId, targetId] of votes) {
+            const voterName = gameSession.getPlayerDisplayName(voterId);
+            const targetName = gameSession.getPlayerDisplayName(targetId);
+            const voterRole = gameSession.getPlayerRole(voterId);
+            const voteWeight = (voterRole?.role === 'MAYOR' && gameSession.isMayorRevealed()) ? ' (4 votes)' : '';
+            voteDetailsText += `${voterName} → ${targetName}${voteWeight}\n`;
+        }
+    } else {
+        voteDetailsText = 'No votes cast yet';
     }
 
     const embed = new EmbedBuilder()
@@ -466,7 +482,8 @@ function createDayPhaseEmbed(gameSession) {
         .setDescription('Vote to eliminate a player. The player with the most votes will be eliminated.')
         .setColor(0xffaa00)
         .addFields(
-            { name: '🗳️ Current Votes', value: voteCountText, inline: false },
+            { name: '🗳️ Vote Counts', value: voteCountText, inline: false },
+            { name: '📊 Vote Details', value: voteDetailsText, inline: false },
             { name: '👥 Alive Players', value: `${alivePlayers.size} players remaining`, inline: true }
         )
         .setFooter({ text: 'Vote wisely! Majority rules.' })
@@ -475,10 +492,10 @@ function createDayPhaseEmbed(gameSession) {
     // Add Mayor status if revealed
     if (gameSession.isMayorRevealed()) {
         const mayorId = gameSession.getMayorId();
-        const mayorUsername = gameSession.getPlayerUsername(mayorId);
+        const mayorDisplayName = gameSession.getPlayerDisplayName(mayorId);
         embed.addFields({
             name: '🏛️ Mayor Revealed',
-            value: `**${mayorUsername}** is the Mayor (votes count as 2)`,
+            value: `**${mayorDisplayName}** is the Mayor (votes count as 4)`,
             inline: false
         });
     }
@@ -498,11 +515,11 @@ function createVoteButtons(gameSession) {
     // Create vote buttons (max 5 buttons per row)
     const voteButtons = [];
     for (const playerId of alivePlayers) {
-        const username = gameSession.getPlayerUsername(playerId);
+        const displayName = gameSession.getPlayerDisplayName(playerId);
         voteButtons.push(
             new ButtonBuilder()
                 .setCustomId(`vote_${playerId}`)
-                .setLabel(`Vote ${username}`)
+                .setLabel(`Vote ${displayName}`)
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🗳️')
         );
@@ -978,8 +995,8 @@ async function announceGameEnd(interaction, gameSession) {
         rolesText += `${statusEmoji} **${player.username}** - ${roleEmoji} ${player.roleInfo.name}`;
 
         // Add target information for Executioner
-        if (player.role === 'EXECUTIONER' && player.target) {
-            rolesText += ` (Target: ${player.target.username})`;
+        if (player.role === 'EXECUTIONER' && player.targetRole) {
+            rolesText += ` (Target: ${player.targetRoleInfo.name})`;
         }
 
         rolesText += '\n';
