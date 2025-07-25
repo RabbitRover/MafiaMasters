@@ -586,12 +586,17 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
 
         // Check for game end
         if (eliminationResult.gameEnded) {
-            const winner = eliminationResult.winner;
-            const winReason = eliminationResult.winReason;
+            const winResult = eliminationResult.winner;
+            const winners = winResult.winners;
+
+            let winText = '';
+            for (const winner of winners) {
+                winText += `**${winner.username}** (${winner.type}) wins!\n*${winner.reason}*\n`;
+            }
 
             resultEmbed.addFields({
                 name: '🏆 Game Over!',
-                value: `**${winner}** wins!\n*${winReason}*`,
+                value: winText,
                 inline: false
             });
 
@@ -625,12 +630,14 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
         flags: 0 // Public message
     });
 
-    // If game ended, clean up the session
+    // If game ended, show final results and clean up
     if (eliminationResult.gameEnded) {
+        await announceGameEnd(interaction, gameSession);
+
         // Remove the game session after a delay to allow players to see results
         setTimeout(() => {
             activeSessions.delete(gameSession.channelId);
-        }, 30000); // 30 seconds
+        }, 60000); // 60 seconds
     } else {
         // Game continues - start night phase after a short delay
         setTimeout(async () => {
@@ -852,6 +859,23 @@ async function processNightPhaseEnd(interaction, gameSession, nightMessage) {
                 { name: '🔪 Cause of Death', value: 'Eliminated by the Mafia', inline: false }
             )
             .setTimestamp();
+
+        // Check for game end due to night elimination
+        if (nightResult.gameEnded && nightResult.winner) {
+            const winResult = nightResult.winner;
+            let winText = '';
+            for (const winner of winResult.winners) {
+                winText += `**${winner.username}** (${winner.type}) wins!\n*${winner.reason}*\n`;
+            }
+
+            resultEmbed.addFields({
+                name: '🏆 Game Over!',
+                value: winText,
+                inline: false
+            });
+
+            resultEmbed.setColor(0x00ff00);
+        }
     } else {
         resultEmbed = new EmbedBuilder()
             .setTitle('🌅 Peaceful Night')
@@ -897,13 +921,91 @@ async function processNightPhaseEnd(interaction, gameSession, nightMessage) {
         flags: 0 // Public message
     });
 
-    // Start next day phase after a short delay
-    setTimeout(async () => {
-        if (!gameSession.hasGameEnded()) {
-            gameSession.incrementDay();
-            await startDayPhase(interaction, gameSession);
+    // Check if game ended due to night elimination
+    if (nightResult.gameEnded) {
+        await announceGameEnd(interaction, gameSession);
+
+        // Remove the game session after a delay
+        setTimeout(() => {
+            activeSessions.delete(gameSession.channelId);
+        }, 60000); // 60 seconds
+    } else {
+        // Start next day phase after a short delay
+        setTimeout(async () => {
+            if (!gameSession.hasGameEnded()) {
+                gameSession.incrementDay();
+                await startDayPhase(interaction, gameSession);
+            }
+        }, 3000); // 3 second delay before next day
+    }
+}
+
+/**
+ * Announce game end with winners and all player roles
+ * @param {Interaction} interaction - The Discord interaction
+ * @param {GameSession} gameSession - The game session
+ */
+async function announceGameEnd(interaction, gameSession) {
+    const gameWinner = gameSession.getGameWinner();
+    const allPlayers = gameSession.getAllPlayersWithRoles();
+
+    // Create winner announcement embed
+    const winnerEmbed = new EmbedBuilder()
+        .setTitle('🎉 Game Over!')
+        .setColor(0xffd700)
+        .setTimestamp();
+
+    // Add winner information
+    let winnerText = '';
+    for (const winner of gameWinner.winners) {
+        winnerText += `🏆 **${winner.username}** (${winner.type})\n`;
+        winnerText += `*${winner.reason}*\n\n`;
+    }
+
+    winnerEmbed.setDescription(winnerText);
+
+    // Create player roles embed
+    const rolesEmbed = new EmbedBuilder()
+        .setTitle('📋 Final Player Roles')
+        .setColor(0x0099ff)
+        .setTimestamp();
+
+    let rolesText = '';
+    for (const player of allPlayers) {
+        const statusEmoji = player.isAlive ? '💚' : '💀';
+        const roleEmoji = player.roleInfo.emoji;
+
+        rolesText += `${statusEmoji} **${player.username}** - ${roleEmoji} ${player.roleInfo.name}`;
+
+        // Add target information for Executioner
+        if (player.role === 'EXECUTIONER' && player.target) {
+            rolesText += ` (Target: ${player.target.username})`;
         }
-    }, 3000); // 3 second delay before next day
+
+        rolesText += '\n';
+    }
+
+    rolesEmbed.setDescription(rolesText);
+
+    // Add game statistics
+    const statsEmbed = new EmbedBuilder()
+        .setTitle('📊 Game Statistics')
+        .setColor(0x808080)
+        .addFields(
+            { name: '📅 Days Survived', value: `${gameSession.getDayNumber()}`, inline: true },
+            { name: '👥 Players', value: `${allPlayers.length}`, inline: true },
+            { name: '💀 Eliminated', value: `${allPlayers.filter(p => !p.isAlive).length}`, inline: true }
+        )
+        .setTimestamp();
+
+    // Send all embeds
+    await interaction.followUp({
+        embeds: [winnerEmbed, rolesEmbed, statsEmbed],
+        flags: 0 // Public message
+    });
+
+    // Reset game state (optional - for potential restart functionality)
+    // gameSession.resetGameState();
 }
 
 /**

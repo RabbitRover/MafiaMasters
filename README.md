@@ -16,7 +16,8 @@ A Discord bot for playing Mafia games in your server channels.
 - **Night phase mechanics** with Mafia kills
 - **Executioner protection** (cannot be killed at night)
 - **Role conversion system** (Executioner → Jester)
-- **Win condition checking** (Jester, Executioner)
+- **Comprehensive win conditions** for all roles
+- **Game end announcements** with role reveals
 
 ## Setup
 
@@ -103,23 +104,28 @@ npm start
 13. Night results announced, role changes processed
 14. **Next day begins** - cycle continues until win condition met
 
-## Available Roles
+## Available Roles & Win Conditions
 
 ### Town Roles
 - **🏛️ Mayor** - Double voting power, can reveal for extra influence
-  - *Win Condition*: Eliminate all Mafia and harmful neutrals
+  - *Win Condition*: **Wins if Mafia is voted out during day phase**
+  - *Special*: Votes count as 2 when revealed
 
 ### Mafia Roles
 - **🔫 Mafia** - Can kill players at night
-  - *Win Condition*: Achieve numerical superiority over Town
+  - *Win Condition*: **Wins if Mayor is killed at night**
+  - *Special*: Cannot kill Executioner at night
 
 ### Neutral Roles
 - **🃏 Jester** - Wants to be lynched to win
-  - *Win Condition*: Get voted out during the day
+  - *Win Condition*: **Wins immediately if voted out during day phase**
+  - *Priority*: Highest win priority (game ends instantly)
 - **🛡️ Survivor** - Has protective vests, wins by surviving
-  - *Win Condition*: Survive until the end
+  - *Win Condition*: **Wins alongside any other role if alive at game end**
+  - *Exception*: Loses if Jester is voted out (Jester wins alone)
+  - *Special*: Co-winner with Mayor/Mafia/Executioner victories
 - **⚔️ Executioner** - Must get their assigned target lynched
-  - *Win Condition*: Get your target voted out during the day
+  - *Win Condition*: **Wins immediately if target is voted out during day phase**
   - *Special*: Has a random target (Jester, Mafia, or Survivor)
   - *Protection*: Cannot be killed at night
   - *Role Change*: Becomes Jester if target dies at night
@@ -142,6 +148,21 @@ npm start
 - **🔄 Role Changes**: Any conversions are announced publicly
 - **🌅 Dawn Transition**: Automatic progression to next day phase
 
+## Game End Mechanics
+
+### Win Condition Priority
+1. **🃏 Jester Win**: Immediate game end if Jester is lynched (wins alone)
+2. **⚔️ Executioner Win**: Immediate game end if Executioner's target is lynched
+3. **🏛️ Mayor Win**: Game ends if Mafia is voted out
+4. **🔫 Mafia Win**: Game ends if Mayor is killed at night
+5. **🛡️ Survivor Co-Win**: Wins alongside other roles if alive at game end
+
+### Game End Announcement
+- **🏆 Winner Declaration**: Clear announcement of who won and why
+- **📋 Role Reveals**: All players' roles revealed publicly
+- **📊 Game Statistics**: Days survived, elimination count, etc.
+- **🧹 Session Cleanup**: Game state reset for potential new game
+
 ## Current Status
 
 ✅ Basic game lobby functionality
@@ -163,8 +184,11 @@ npm start
 ✅ **Role conversion system** (Executioner → Jester when target dies)
 ✅ **Day/Night cycle** with automatic progression
 ✅ **Complete game loop** from start to finish
-🚧 Additional win conditions (Town/Mafia victory)
+✅ **Comprehensive win conditions** for all 5 roles
+✅ **Game end announcements** with role reveals and statistics
+✅ **Session management** with proper cleanup
 🚧 Rules and role information commands
+🚧 Additional game modes and features
 
 ## Contributing
 

@@ -342,7 +342,7 @@ class GameSession {
 
         if (winResult.gameEnded) {
             this.gameState = 'game_ended';
-            this.gameWinner = winResult.winner;
+            this.gameWinner = winResult;
         }
 
         return {
@@ -354,36 +354,88 @@ class GameSession {
             },
             reason: 'eliminated',
             gameEnded: winResult.gameEnded,
-            winner: winResult.winner,
-            winReason: winResult.reason
+            winner: winResult.gameEnded ? winResult : null
         };
     }
 
     /**
-     * Check win conditions after elimination
+     * Check win conditions after day phase elimination
      * @param {string} eliminatedId - ID of eliminated player
      * @param {Object} eliminatedRole - Role info of eliminated player
      * @returns {Object} - Win condition result
      */
     checkWinConditions(eliminatedId, eliminatedRole) {
-        // Check if Jester was eliminated (Jester wins)
+        // Check if Jester was eliminated (Jester wins immediately)
         if (eliminatedRole.role === 'JESTER') {
             return {
                 gameEnded: true,
-                winner: 'Jester',
-                winnerId: eliminatedId,
-                reason: 'Jester was lynched'
+                winners: [{
+                    type: 'Jester',
+                    playerId: eliminatedId,
+                    username: this.getPlayerUsername(eliminatedId),
+                    reason: 'Jester was lynched'
+                }],
+                winType: 'jester_lynched'
             };
         }
 
-        // Check if Executioner's target was eliminated (Executioner wins)
+        // Check if Executioner's target was eliminated (Executioner wins immediately)
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
             if (assignment.role === 'EXECUTIONER' && assignment.target === eliminatedId) {
+                // Executioner wins, check if Survivor also wins (if alive)
+                const winners = [{
+                    type: 'Executioner',
+                    playerId: playerId,
+                    username: this.getPlayerUsername(playerId),
+                    reason: 'Executioner got their target lynched'
+                }];
+
+                // Add Survivor as co-winner if alive
+                const survivorId = this.getSurvivorId();
+                if (survivorId && this.alivePlayers.has(survivorId)) {
+                    winners.push({
+                        type: 'Survivor',
+                        playerId: survivorId,
+                        username: this.getPlayerUsername(survivorId),
+                        reason: 'Survivor was alive at game end'
+                    });
+                }
+
                 return {
                     gameEnded: true,
-                    winner: 'Executioner',
-                    winnerId: playerId,
-                    reason: 'Executioner got their target lynched'
+                    winners: winners,
+                    winType: 'executioner_target_lynched'
+                };
+            }
+        }
+
+        // Check if Mafia was eliminated (Mayor wins)
+        if (eliminatedRole.role === 'MAFIA') {
+            const mayorId = this.getMayorId();
+            if (mayorId && this.alivePlayers.has(mayorId)) {
+                // Mayor wins, check if Survivor also wins (if alive)
+                const winners = [{
+                    type: 'Mayor',
+                    playerId: mayorId,
+                    username: this.getPlayerUsername(mayorId),
+                    reason: 'Mayor eliminated the Mafia'
+                }];
+
+                // Add Survivor as co-winner if alive
+                const survivorId = this.getSurvivorId();
+                if (survivorId && this.alivePlayers.has(survivorId)) {
+                    winners.push({
+                        type: 'Survivor',
+                        playerId: survivorId,
+                        username: this.getPlayerUsername(survivorId),
+                        reason: 'Survivor was alive at game end'
+                    });
+                }
+
+                return {
+                    gameEnded: true,
+                    winners: winners,
+                    winType: 'mayor_eliminated_mafia'
                 };
             }
         }
@@ -391,9 +443,67 @@ class GameSession {
         // Game continues
         return {
             gameEnded: false,
-            winner: null,
-            reason: null
+            winners: [],
+            winType: null
         };
+    }
+
+    /**
+     * Check win conditions after night phase elimination
+     * @param {string|null} eliminatedId - ID of eliminated player (null if no kill)
+     * @returns {Object} - Win condition result
+     */
+    checkNightWinConditions(eliminatedId) {
+        if (!eliminatedId) {
+            return { gameEnded: false, winners: [], winType: null };
+        }
+
+        const eliminatedRole = this.getPlayerRole(eliminatedId);
+
+        // Check if Mayor was killed (Mafia wins)
+        if (eliminatedRole.role === 'MAYOR') {
+            const mafiaId = this.getMafiaId();
+            if (mafiaId) {
+                // Mafia wins, check if Survivor also wins (if alive)
+                const winners = [{
+                    type: 'Mafia',
+                    playerId: mafiaId,
+                    username: this.getPlayerUsername(mafiaId),
+                    reason: 'Mafia killed the Mayor'
+                }];
+
+                // Add Survivor as co-winner if alive
+                const survivorId = this.getSurvivorId();
+                if (survivorId && this.alivePlayers.has(survivorId)) {
+                    winners.push({
+                        type: 'Survivor',
+                        playerId: survivorId,
+                        username: this.getPlayerUsername(survivorId),
+                        reason: 'Survivor was alive at game end'
+                    });
+                }
+
+                return {
+                    gameEnded: true,
+                    winners: winners,
+                    winType: 'mafia_killed_mayor'
+                };
+            }
+        }
+
+        // Check if game should end with Survivor win
+        return this.checkSurvivorWin();
+    }
+
+    /**
+     * Check if Survivor should win (alive at end, unless Jester wins)
+     * Note: Survivor only wins alongside other roles, not as standalone winner
+     * @returns {Object} - Win condition result
+     */
+    checkSurvivorWin() {
+        // Survivor doesn't win standalone - only wins with other roles at game end
+        // This method is kept for potential future standalone Survivor win conditions
+        return { gameEnded: false, winners: [], winType: null };
     }
 
     /**
@@ -514,6 +624,14 @@ class GameSession {
             }
         }
 
+        // Check win conditions after night elimination
+        const winResult = this.checkNightWinConditions(eliminatedId);
+
+        if (winResult.gameEnded) {
+            this.gameState = 'game_ended';
+            this.gameWinner = winResult;
+        }
+
         return {
             eliminated: {
                 id: eliminatedId,
@@ -523,7 +641,8 @@ class GameSession {
             },
             reason: 'killed_by_mafia',
             roleChanges: roleChanges,
-            gameEnded: false // Night kills don't trigger immediate wins
+            gameEnded: winResult.gameEnded,
+            winner: winResult.gameEnded ? winResult : null
         };
     }
 
@@ -556,6 +675,76 @@ class GameSession {
      */
     incrementDay() {
         this.dayNumber++;
+    }
+
+    /**
+     * Get the Survivor's ID
+     * @returns {string|null} - Survivor's user ID or null if not found
+     */
+    getSurvivorId() {
+        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+            if (assignment.role === 'SURVIVOR') {
+                return playerId;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Check if there's an active Executioner (alive with a living target)
+     * @returns {boolean}
+     */
+    hasActiveExecutioner() {
+        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+            if (assignment.role === 'EXECUTIONER' &&
+                this.alivePlayers.has(playerId) &&
+                assignment.target &&
+                this.alivePlayers.has(assignment.target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get all players and their roles for game end display
+     * @returns {Array<Object>} - Array of player info with roles
+     */
+    getAllPlayersWithRoles() {
+        const playersWithRoles = [];
+
+        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+            playersWithRoles.push({
+                id: playerId,
+                username: this.getPlayerUsername(playerId),
+                role: assignment.role,
+                roleInfo: assignment.roleInfo,
+                isAlive: this.alivePlayers.has(playerId),
+                target: assignment.target ? {
+                    id: assignment.target,
+                    username: this.getPlayerUsername(assignment.target)
+                } : null
+            });
+        }
+
+        return playersWithRoles;
+    }
+
+    /**
+     * Reset the game state for a new game
+     */
+    resetGameState() {
+        this.gameState = 'waiting';
+        this.votes.clear();
+        this.mayorRevealed = false;
+        this.alivePlayers.clear();
+        this.gameWinner = null;
+        this.eliminatedPlayer = null;
+        this.nightKillTarget = null;
+        this.dayNumber = 1;
+        this.roleAssignments = {};
+        this.players.clear();
+        this.playerUsernames.clear();
     }
 }
 
