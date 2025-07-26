@@ -254,26 +254,99 @@ async function sendRoleAssignments(interaction, gameSession) {
         flags: 0 // Public message
     });
 
-    // Send roles directly to each player via ephemeral messages
-    const playerIds = gameSession.getPlayerIds();
-    for (const playerId of playerIds) {
-        const assignment = gameSession.getPlayerRole(playerId);
-        if (assignment) {
-            try {
-                // Create role message embed
-                const roleEmbed = createRoleMessage(assignment);
+    // Create role assignment button for each player to get their role privately
+    const roleButton = new ButtonBuilder()
+        .setCustomId('get_role')
+        .setLabel('Get My Role')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🎭');
 
-                // Send ephemeral follow-up message to the specific player
-                await interaction.followUp({
-                    content: `<@${playerId}> Here is your role:`,
-                    embeds: [roleEmbed],
-                    flags: 64 // Ephemeral - only visible to mentioned user
-                });
-            } catch (error) {
-                console.error(`Failed to send role to ${playerId}:`, error);
-            }
+    const roleRow = new ActionRowBuilder().addComponents(roleButton);
+
+    // Send role assignment message with button
+    const roleMessage = await interaction.followUp({
+        embeds: [roleEmbed],
+        components: [roleRow],
+        flags: 0 // Public message
+    });
+
+    // Set up role distribution collector
+    const roleCollector = roleMessage.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 300000 // 5 minutes
+    });
+
+    const playersWhoGotRoles = new Set();
+
+    roleCollector.on('collect', async (roleInteraction) => {
+        const userId = roleInteraction.user.id;
+
+        // Check if user is in the game
+        if (!gameSession.hasPlayer(userId)) {
+            await roleInteraction.reply({
+                content: '❌ You are not in this game!',
+                flags: 64 // Ephemeral
+            });
+            return;
         }
-    }
+
+        // Check if player already got their role
+        if (playersWhoGotRoles.has(userId)) {
+            await roleInteraction.reply({
+                content: '❌ You already received your role!',
+                flags: 64 // Ephemeral
+            });
+            return;
+        }
+
+        // Get player's role assignment
+        const assignment = gameSession.getPlayerRole(userId);
+        if (!assignment) {
+            await roleInteraction.reply({
+                content: '❌ Role assignment error!',
+                flags: 64 // Ephemeral
+            });
+            return;
+        }
+
+        // Create role message embed
+        const roleEmbed = createRoleMessage(assignment);
+
+        // Send role to player via ephemeral message
+        await roleInteraction.reply({
+            embeds: [roleEmbed],
+            flags: 64 // Ephemeral
+        });
+
+        playersWhoGotRoles.add(userId);
+
+        // Check if all players have received their roles
+        if (playersWhoGotRoles.size === gameSession.getPlayerCount()) {
+            // All players have their roles, start day phase
+            roleCollector.stop();
+
+            // Wait a moment then start day phase
+            setTimeout(async () => {
+                await startDayPhase(interaction, gameSession);
+            }, 2000);
+        }
+    });
+
+    roleCollector.on('end', async () => {
+        // Disable the role button
+        roleButton.setDisabled(true);
+        await roleMessage.edit({
+            embeds: [roleEmbed],
+            components: [roleRow]
+        });
+
+        // If not all players got roles, start day phase anyway
+        if (playersWhoGotRoles.size < gameSession.getPlayerCount()) {
+            setTimeout(async () => {
+                await startDayPhase(interaction, gameSession);
+            }, 1000);
+        }
+    });
 
     // Start day phase after a short delay
     setTimeout(async () => {
@@ -409,11 +482,19 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         }
 
     } else if (customId === 'skip_vote') {
-        // Handle skip vote
-        await interaction.reply({
-            content: '⏭️ You chose to skip voting this round',
-            flags: 64 // Ephemeral
-        });
+        // Handle skip vote - remove any existing vote
+        const hadVote = gameSession.removeVote(userId);
+        if (hadVote) {
+            await interaction.reply({
+                content: '⏭️ You removed your vote and chose to skip voting this round',
+                flags: 64 // Ephemeral
+            });
+        } else {
+            await interaction.reply({
+                content: '⏭️ You chose to skip voting this round',
+                flags: 64 // Ephemeral
+            });
+        }
 
     } else if (customId === 'end_day') {
         // Handle day phase end (host only - even if eliminated)
@@ -713,45 +794,10 @@ async function startNightPhase(interaction, gameSession) {
         return;
     }
 
-    // Send night phase announcement
-    const nightEmbed = new EmbedBuilder()
-        .setTitle('🌙 Night Phase')
-        .setDescription('The town sleeps... but evil lurks in the shadows.')
-        .setColor(0x2c2f33)
-        .addFields(
-            { name: '🌃 Night Actions', value: 'The Mafia is choosing their target...', inline: false },
-            { name: '👥 Alive Players', value: `${gameSession.getAlivePlayers().size} players remaining`, inline: true },
-            { name: '📅 Day', value: `Day ${gameSession.getDayNumber()}`, inline: true }
-        )
-        .setTimestamp();
-
-    const nightMessage = await interaction.followUp({
-        embeds: [nightEmbed],
-        flags: 0 // Public message
-    });
-
-    // Send Mafia their kill options via ephemeral message
-    await sendMafiaKillOptions(interaction, gameSession, mafiaId);
-
-    // Set up timeout for night phase (2 minutes)
-    setTimeout(async () => {
-        if (gameSession.isNightPhase()) {
-            await processNightPhaseEnd(interaction, gameSession, nightMessage);
-        }
-    }, 120000); // 2 minutes
-}
-
-/**
- * Send Mafia player their kill options
- * @param {Interaction} interaction - The Discord interaction
- * @param {GameSession} gameSession - The game session
- * @param {string} mafiaId - The Mafia player's ID
- */
-async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
-    const alivePlayers = Array.from(gameSession.getAlivePlayers());
-    const killButtons = [];
+    const alivePlayers = gameSession.getAlivePlayers();
 
     // Create kill buttons for all alive players except Mafia
+    const killButtons = [];
     for (const playerId of alivePlayers) {
         if (playerId !== mafiaId) {
             const nickname = gameSession.getPlayerNickname(playerId);
@@ -772,7 +818,7 @@ async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
         }
     }
 
-    // Add skip kill option
+    // Add skip kill button
     killButtons.push(
         new ButtonBuilder()
             .setCustomId('night_skip')
@@ -781,46 +827,70 @@ async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
             .setEmoji('⏭️')
     );
 
-    // Split buttons into rows (max 5 per row)
+    // Create action rows (max 5 buttons per row)
     const rows = [];
     for (let i = 0; i < killButtons.length; i += 5) {
-        const row = new ActionRowBuilder();
-        row.addComponents(killButtons.slice(i, i + 5));
+        const row = new ActionRowBuilder().addComponents(killButtons.slice(i, i + 5));
         rows.push(row);
     }
 
-    const mafiaEmbed = new EmbedBuilder()
-        .setTitle('🔫 Mafia Night Action')
-        .setDescription('Choose a player to eliminate tonight, or skip your kill.')
-        .setColor(0xff0000)
+    // Send night phase announcement with kill buttons
+    const nightEmbed = new EmbedBuilder()
+        .setTitle('🌙 Night Phase')
+        .setDescription('The town sleeps... but evil lurks in the shadows.\n\n🔫 **Mafia**: Choose your target below, or skip your kill.')
+        .setColor(0x2c2f33)
         .addFields(
-            { name: '🛡️ Protected Players', value: 'Executioner cannot be killed at night', inline: false },
-            { name: '⏰ Time Limit', value: '2 minutes to decide', inline: false }
+            { name: '👥 Alive Players', value: `${alivePlayers.size} players remaining`, inline: true },
+            { name: '📅 Day', value: `Day ${gameSession.getDayNumber()}`, inline: true },
+            { name: '🛡️ Protected Players', value: 'Executioner cannot be killed at night', inline: false }
         )
         .setTimestamp();
 
-    // Send ephemeral message to Mafia in channel
-    const mafiaMessage = await interaction.followUp({
-        content: `<@${mafiaId}> **Your night action:**`,
-        embeds: [mafiaEmbed],
+    const nightMessage = await interaction.followUp({
+        embeds: [nightEmbed],
         components: rows,
-        flags: 64 // Ephemeral - only visible to the Mafia
+        flags: 0 // Public message
     });
 
-    // Create collector for Mafia actions
+    // Create collector that only allows Mafia to interact
     const filter = (buttonInteraction) => {
         return buttonInteraction.user.id === mafiaId;
     };
 
-    const collector = mafiaMessage.createMessageComponentCollector({
+    const collector = nightMessage.createMessageComponentCollector({
         filter,
         time: 120000 // 2 minutes
     });
 
     collector.on('collect', async (buttonInteraction) => {
         await handleMafiaKillAction(buttonInteraction, gameSession);
+
+        // Disable all buttons after action is taken
+        const disabledRows = rows.map(row => {
+            const newRow = new ActionRowBuilder();
+            row.components.forEach(button => {
+                newRow.addComponents(ButtonBuilder.from(button).setDisabled(true));
+            });
+            return newRow;
+        });
+
+        await nightMessage.edit({
+            embeds: [nightEmbed],
+            components: disabledRows
+        });
+
+        collector.stop();
+    });
+
+    collector.on('end', async () => {
+        // Process night results
+        setTimeout(async () => {
+            await processNightPhaseEnd(interaction, gameSession, nightMessage);
+        }, 2000);
     });
 }
+
+
 
 /**
  * Handle Mafia kill action
@@ -843,9 +913,9 @@ async function handleMafiaKillAction(interaction, gameSession) {
         const targetId = customId.replace('night_kill_', '');
 
         if (gameSession.setNightKillTarget(targetId)) {
-            const targetUsername = gameSession.getPlayerUsername(targetId);
+            const targetNickname = gameSession.getPlayerNickname(targetId);
             await interaction.reply({
-                content: `🔪 You have chosen to eliminate **${targetUsername}** tonight.`,
+                content: `🔪 You have chosen to eliminate **${targetNickname}** tonight.`,
                 flags: 64 // Ephemeral
             });
         } else {
