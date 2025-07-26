@@ -18,7 +18,9 @@ client.commands = new Collection();
 
 // Import commands
 const startCommand = require('./commands/start');
+const mafiaCommand = require('./commands/mafia');
 client.commands.set(startCommand.data.name, startCommand);
+client.commands.set(mafiaCommand.data.name, mafiaCommand);
 
 // When the client is ready, run this code
 client.once('ready', async () => {

@@ -1,16 +1,11 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const GameSession = require('../game/GameSession');
 const { assignRoles, createRoleMessage } = require('../game/roles');
 
 // Store active game sessions (in memory for now)
 const activeSessions = new Map();
 
-module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('start')
-        .setDescription('Start a new Mafia game session'),
-
-    async execute(interaction) {
+async function handleStartCommand(interaction, sessionsMap = activeSessions) {
         const channelId = interaction.channelId;
         const hostId = interaction.user.id;
 
@@ -34,10 +29,10 @@ module.exports = {
             embeds: [embed],
             components: [row]
         });
-    },
+}
 
-    // Handle button interactions
-    async handleButtonInteraction(interaction) {
+// Handle button interactions
+async function handleButtonInteraction(interaction) {
         const channelId = interaction.channelId;
         const userId = interaction.user.id;
         const gameSession = activeSessions.get(channelId);
@@ -153,18 +148,17 @@ module.exports = {
             // Send role assignments to each player via ephemeral messages
             await sendRoleAssignments(interaction, gameSession);
         }
-    },
+}
 
-    // Utility function to get active sessions (for cleanup or other commands)
-    getActiveSessions() {
-        return activeSessions;
-    },
+// Utility function to get active sessions (for cleanup or other commands)
+function getActiveSessions() {
+    return activeSessions;
+}
 
-    // Clean up a session
-    endSession(channelId) {
-        return activeSessions.delete(channelId);
-    }
-};
+// Clean up a session
+function endSession(channelId) {
+    return activeSessions.delete(channelId);
+}
 
 /**
  * Create the game embed with current status
@@ -248,58 +242,106 @@ function createButtonRow(gameSession) {
  * @param {GameSession} gameSession - The game session
  */
 async function sendRoleAssignments(interaction, gameSession) {
-    // Send roles directly to players and start day phase immediately
+    // Create role assignment button for each player
     const roleEmbed = new EmbedBuilder()
         .setTitle('🎭 Roles have been assigned!')
-        .setDescription('Check your DMs for your role information. The day phase will begin shortly!')
+        .setDescription('Click the button below to see your role privately. Only you will see your role information!')
         .setColor(0x9932cc)
         .setTimestamp();
 
-    // Send role assignment announcement
-    await interaction.followUp({
+    // Create "Get My Role" button
+    const roleButton = new ButtonBuilder()
+        .setCustomId('get_role')
+        .setLabel('Get My Role')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🎭');
+
+    const roleRow = new ActionRowBuilder().addComponents(roleButton);
+
+    // Send role assignment message
+    const roleMessage = await interaction.followUp({
         embeds: [roleEmbed],
+        components: [roleRow],
         flags: 0 // Public message
     });
 
-    // Send roles directly to each player
-    const playerIds = gameSession.getPlayerIds();
-    for (const playerId of playerIds) {
-        const assignment = gameSession.getPlayerRole(playerId);
-        if (assignment) {
-            try {
-                const user = await interaction.client.users.fetch(playerId);
-                const roleEmbed = createRoleMessage(assignment);
+    // Set up role distribution collector
+    const roleCollector = roleMessage.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 300000 // 5 minutes
+    });
 
-                // Send role via DM
-                await user.send({ embeds: [roleEmbed] });
+    const playersWhoGotRoles = new Set();
 
-                // Also ping them in the channel
-                const nickname = gameSession.getPlayerNickname(playerId);
-                await interaction.followUp({
-                    content: `<@${playerId}> Your role has been sent to your DMs!`,
-                    flags: 0 // Public message
-                });
-            } catch (error) {
-                console.error(`Failed to send role to ${playerId}:`, error);
-                // If DM fails, send ephemeral message in channel
-                try {
-                    const roleEmbed = createRoleMessage(assignment);
-                    await interaction.followUp({
-                        content: `<@${playerId}> Couldn't send DM, here's your role:`,
-                        embeds: [roleEmbed],
-                        flags: 0 // Public message (fallback)
-                    });
-                } catch (fallbackError) {
-                    console.error(`Failed to send fallback role to ${playerId}:`, fallbackError);
-                }
-            }
+    roleCollector.on('collect', async (roleInteraction) => {
+        const userId = roleInteraction.user.id;
+
+        // Check if user is in the game
+        if (!gameSession.hasPlayer(userId)) {
+            await roleInteraction.reply({
+                content: '❌ You are not in this game!',
+                flags: 64 // Ephemeral
+            });
+            return;
         }
-    }
 
-    // Start day phase immediately after a short delay
-    setTimeout(async () => {
-        await startDayPhase(interaction, gameSession);
-    }, 3000); // 3 second delay
+        // Check if player already got their role
+        if (playersWhoGotRoles.has(userId)) {
+            await roleInteraction.reply({
+                content: '❌ You already received your role!',
+                flags: 64 // Ephemeral
+            });
+            return;
+        }
+
+        // Get player's role assignment
+        const assignment = gameSession.getPlayerRole(userId);
+        if (!assignment) {
+            await roleInteraction.reply({
+                content: '❌ Role assignment error!',
+                flags: 64 // Ephemeral
+            });
+            return;
+        }
+
+        // Create role message embed
+        const roleEmbed = createRoleMessage(assignment);
+
+        // Send role to player via ephemeral message
+        await roleInteraction.reply({
+            embeds: [roleEmbed],
+            flags: 64 // Ephemeral
+        });
+
+        playersWhoGotRoles.add(userId);
+
+        // Check if all players have received their roles
+        if (playersWhoGotRoles.size === gameSession.getPlayerCount()) {
+            // All players have their roles, start day phase
+            roleCollector.stop();
+
+            // Wait a moment then start day phase
+            setTimeout(async () => {
+                await startDayPhase(interaction, gameSession);
+            }, 2000);
+        }
+    });
+
+    roleCollector.on('end', async () => {
+        // Disable the role button
+        roleButton.setDisabled(true);
+        await roleMessage.edit({
+            embeds: [roleEmbed],
+            components: [roleRow]
+        });
+
+        // If not all players got roles, start day phase anyway
+        if (playersWhoGotRoles.size < gameSession.getPlayerCount()) {
+            setTimeout(async () => {
+                await startDayPhase(interaction, gameSession);
+            }, 1000);
+        }
+    });
 }
 
 /**
@@ -391,6 +433,13 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
                 flags: 64 // Ephemeral
             });
         }
+
+    } else if (customId === 'skip_vote') {
+        // Handle skip vote
+        await interaction.reply({
+            content: '⏭️ You chose to skip voting this round',
+            flags: 64 // Ephemeral
+        });
 
     } else if (customId === 'end_day') {
         // Handle day phase end (host only)
@@ -527,6 +576,15 @@ function createVoteButtons(gameSession) {
                 .setEmoji('🏛️')
         );
     }
+
+    // Skip vote button
+    actionRow.addComponents(
+        new ButtonBuilder()
+            .setCustomId('skip_vote')
+            .setLabel('Skip Voting')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('⏭️')
+    );
 
     // End day button (host only)
     actionRow.addComponents(
@@ -1039,3 +1097,18 @@ async function skipNightPhase(interaction, gameSession) {
         }
     }, 3000); // 3 second delay before next day
 }
+
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('start')
+        .setDescription('Start a new Mafia game session'),
+
+    async execute(interaction) {
+        await handleStartCommand(interaction, activeSessions);
+    },
+
+    handleStartCommand,
+    handleButtonInteraction,
+    getActiveSessions,
+    endSession
+};
