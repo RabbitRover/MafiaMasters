@@ -12,6 +12,7 @@ class GameSession {
 
         // Day phase voting system
         this.votes = new Map(); // voterId -> targetId
+        this.skipVotes = new Set(); // players who chose to skip voting
         this.mayorRevealed = false;
         this.alivePlayers = new Set(); // Track alive players
         this.gameWinner = null; // Store game winner
@@ -77,6 +78,14 @@ class GameSession {
      */
     isHost(userId) {
         return this.hostId === userId;
+    }
+
+    /**
+     * Get the host ID
+     * @returns {string} - Host user ID
+     */
+    getHostId() {
+        return this.hostId;
     }
 
     /**
@@ -192,6 +201,7 @@ class GameSession {
     startDayPhase() {
         this.gameState = 'day_phase';
         this.votes.clear();
+        this.skipVotes.clear();
     }
 
     /**
@@ -205,9 +215,7 @@ class GameSession {
             return false; // Can't vote if dead or vote for dead player
         }
 
-        if (voterId === targetId) {
-            return false; // Can't vote for yourself
-        }
+        // Allow self-voting (removed restriction)
 
         this.votes.set(voterId, targetId);
         return true;
@@ -219,7 +227,27 @@ class GameSession {
      * @returns {boolean} - True if vote was removed
      */
     removeVote(voterId) {
-        return this.votes.delete(voterId);
+        const hadVote = this.votes.delete(voterId);
+        const hadSkip = this.skipVotes.delete(voterId);
+        return hadVote || hadSkip;
+    }
+
+    /**
+     * Add a skip vote
+     * @param {string} voterId - ID of the player skipping
+     */
+    addSkipVote(voterId) {
+        // Remove any existing vote first
+        this.votes.delete(voterId);
+        this.skipVotes.add(voterId);
+    }
+
+    /**
+     * Get skip votes
+     * @returns {Set} - Set of player IDs who skipped voting
+     */
+    getSkipVotes() {
+        return this.skipVotes;
     }
 
     /**
@@ -408,35 +436,47 @@ class GameSession {
             }
         }
 
-        // Check if Mafia was eliminated (Mayor wins)
+        // Check if Mafia was eliminated (Game ends - Mayor and Survivor win if alive)
         if (eliminatedRole.role === 'MAFIA') {
+            const winners = [];
+
+            // Mayor wins if alive
             const mayorId = this.getMayorId();
             if (mayorId && this.alivePlayers.has(mayorId)) {
-                // Mayor wins, check if Survivor also wins (if alive)
-                const winners = [{
+                winners.push({
                     type: 'Mayor',
                     playerId: mayorId,
                     username: this.getPlayerNickname(mayorId),
                     reason: 'Mayor eliminated the Mafia'
-                }];
-
-                // Add Survivor as co-winner if alive
-                const survivorId = this.getSurvivorId();
-                if (survivorId && this.alivePlayers.has(survivorId)) {
-                    winners.push({
-                        type: 'Survivor',
-                        playerId: survivorId,
-                        username: this.getPlayerNickname(survivorId),
-                        reason: 'Survivor was alive at game end'
-                    });
-                }
-
-                return {
-                    gameEnded: true,
-                    winners: winners,
-                    winType: 'mayor_eliminated_mafia'
-                };
+                });
             }
+
+            // Survivor wins if alive
+            const survivorId = this.getSurvivorId();
+            if (survivorId && this.alivePlayers.has(survivorId)) {
+                winners.push({
+                    type: 'Survivor',
+                    playerId: survivorId,
+                    username: this.getPlayerNickname(survivorId),
+                    reason: 'Survivor was alive at game end'
+                });
+            }
+
+            // If no winners, still end the game
+            if (winners.length === 0) {
+                winners.push({
+                    type: 'Town',
+                    playerId: null,
+                    username: 'Town',
+                    reason: 'Mafia was eliminated'
+                });
+            }
+
+            return {
+                gameEnded: true,
+                winners: winners,
+                winType: 'mafia_eliminated'
+            };
         }
 
         // Game continues
@@ -733,6 +773,7 @@ class GameSession {
     resetGameState() {
         this.gameState = 'waiting';
         this.votes.clear();
+        this.skipVotes.clear();
         this.mayorRevealed = false;
         this.alivePlayers.clear();
         this.gameWinner = null;

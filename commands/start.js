@@ -482,19 +482,12 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         }
 
     } else if (customId === 'skip_vote') {
-        // Handle skip vote - remove any existing vote
-        const hadVote = gameSession.removeVote(userId);
-        if (hadVote) {
-            await interaction.reply({
-                content: '⏭️ You removed your vote and chose to skip voting this round',
-                flags: 64 // Ephemeral
-            });
-        } else {
-            await interaction.reply({
-                content: '⏭️ You chose to skip voting this round',
-                flags: 64 // Ephemeral
-            });
-        }
+        // Handle skip vote
+        gameSession.addSkipVote(userId);
+        await interaction.reply({
+            content: '⏭️ You chose to skip voting this round',
+            flags: 64 // Ephemeral
+        });
 
     } else if (customId === 'end_day') {
         // Handle day phase end (host only - even if eliminated)
@@ -551,15 +544,24 @@ function createDayPhaseEmbed(gameSession) {
 
     // Create vote details display (who voted for whom)
     let voteDetailsText = '';
-    if (votes.size > 0) {
-        for (const [voterId, targetId] of votes) {
-            const voterName = gameSession.getPlayerNickname(voterId);
-            const targetName = gameSession.getPlayerNickname(targetId);
-            const voterRole = gameSession.getPlayerRole(voterId);
-            const voteWeight = (voterRole?.role === 'MAYOR' && gameSession.isMayorRevealed()) ? ' (4 votes)' : '';
-            voteDetailsText += `${voterName} → ${targetName}${voteWeight}\n`;
-        }
-    } else {
+    const skipVotes = gameSession.getSkipVotes();
+
+    // Show regular votes
+    for (const [voterId, targetId] of votes) {
+        const voterName = gameSession.getPlayerNickname(voterId);
+        const targetName = gameSession.getPlayerNickname(targetId);
+        const voterRole = gameSession.getPlayerRole(voterId);
+        const voteWeight = (voterRole?.role === 'MAYOR' && gameSession.isMayorRevealed()) ? ' (4 votes)' : '';
+        voteDetailsText += `${voterName} → ${targetName}${voteWeight}\n`;
+    }
+
+    // Show skip votes
+    for (const voterId of skipVotes) {
+        const voterName = gameSession.getPlayerNickname(voterId);
+        voteDetailsText += `${voterName} → Skip\n`;
+    }
+
+    if (votes.size === 0 && skipVotes.size === 0) {
         voteDetailsText = 'No votes cast yet';
     }
 
@@ -796,26 +798,40 @@ async function startNightPhase(interaction, gameSession) {
 
     const alivePlayers = gameSession.getAlivePlayers();
 
-    // Create kill buttons for all alive players except Mafia
+    // Create kill buttons for all alive players (including Mafia to hide identity)
     const killButtons = [];
     for (const playerId of alivePlayers) {
-        if (playerId !== mafiaId) {
-            const nickname = gameSession.getPlayerNickname(playerId);
-            const playerRole = gameSession.getPlayerRole(playerId);
+        const nickname = gameSession.getPlayerNickname(playerId);
+        const playerRole = gameSession.getPlayerRole(playerId);
 
-            // Show if player is Executioner (cannot be killed)
-            const isExecutioner = playerRole?.role === 'EXECUTIONER';
-            const buttonLabel = isExecutioner ? `${nickname} (Protected)` : `Kill ${nickname}`;
+        // Show if player is Executioner (cannot be killed) or Mafia (cannot kill self)
+        const isExecutioner = playerRole?.role === 'EXECUTIONER';
+        const isMafia = playerId === mafiaId;
+        const isDisabled = isExecutioner || isMafia;
 
-            killButtons.push(
-                new ButtonBuilder()
-                    .setCustomId(`night_kill_${playerId}`)
-                    .setLabel(buttonLabel)
-                    .setStyle(isExecutioner ? ButtonStyle.Secondary : ButtonStyle.Danger)
-                    .setEmoji(isExecutioner ? '🛡️' : '🔪')
-                    .setDisabled(isExecutioner)
-            );
+        let buttonLabel, buttonStyle, buttonEmoji;
+        if (isExecutioner) {
+            buttonLabel = `${nickname} (Protected)`;
+            buttonStyle = ButtonStyle.Secondary;
+            buttonEmoji = '🛡️';
+        } else if (isMafia) {
+            buttonLabel = `${nickname}`;
+            buttonStyle = ButtonStyle.Secondary;
+            buttonEmoji = '🚫';
+        } else {
+            buttonLabel = `Kill ${nickname}`;
+            buttonStyle = ButtonStyle.Danger;
+            buttonEmoji = '🔪';
         }
+
+        killButtons.push(
+            new ButtonBuilder()
+                .setCustomId(`night_kill_${playerId}`)
+                .setLabel(buttonLabel)
+                .setStyle(buttonStyle)
+                .setEmoji(buttonEmoji)
+                .setDisabled(isDisabled)
+        );
     }
 
     // Add skip kill button
@@ -1091,10 +1107,55 @@ async function announceGameEnd(interaction, gameSession) {
 
     rolesEmbed.setDescription(rolesText);
 
-    // Send embeds (removed game statistics)
-    await interaction.followUp({
+    // Create "Start New Game" button
+    const startNewButton = new ButtonBuilder()
+        .setCustomId('start_new_game')
+        .setLabel('Start New Game')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('🎮');
+
+    const buttonRow = new ActionRowBuilder().addComponents(startNewButton);
+
+    // Send embeds with start new game button
+    const gameEndMessage = await interaction.followUp({
         embeds: [winnerEmbed, rolesEmbed],
+        components: [buttonRow],
         flags: 0 // Public message
+    });
+
+    // Set up collector for start new game button
+    const collector = gameEndMessage.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 300000 // 5 minutes
+    });
+
+    collector.on('collect', async (buttonInteraction) => {
+        if (buttonInteraction.customId === 'start_new_game') {
+            // Only allow the original host to start a new game
+            if (buttonInteraction.user.id === gameSession.getHostId()) {
+                await buttonInteraction.reply({
+                    content: '🎮 Starting a new game...',
+                    flags: 64 // Ephemeral
+                });
+
+                // Start a new game
+                await handleStartCommand(buttonInteraction, activeSessions);
+            } else {
+                await buttonInteraction.reply({
+                    content: '❌ Only the original host can start a new game!',
+                    flags: 64 // Ephemeral
+                });
+            }
+        }
+    });
+
+    collector.on('end', () => {
+        // Disable the button after timeout
+        startNewButton.setDisabled(true);
+        gameEndMessage.edit({
+            embeds: [winnerEmbed, rolesEmbed],
+            components: [buttonRow]
+        }).catch(console.error);
     });
 
     // Reset game state (optional - for potential restart functionality)
