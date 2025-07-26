@@ -4,7 +4,7 @@ class GameSession {
         this.channelId = channelId;
         this.players = new Set(); // Use Set to prevent duplicate players
         this.playerUsernames = new Map(); // Store player usernames: playerId -> username
-        this.playerDisplayNames = new Map(); // Store player display names: playerId -> displayName
+        this.playerNicknames = new Map(); // Store player server nicknames: playerId -> nickname
         this.maxPlayers = 5;
         this.gameState = 'waiting'; // waiting, ready, started, roles_assigned, day_phase, night_phase, game_ended
         this.createdAt = new Date();
@@ -26,10 +26,10 @@ class GameSession {
      * Add a player to the game session
      * @param {string} userId - Discord user ID
      * @param {string} username - Discord username
-     * @param {string} displayName - Discord display name
+     * @param {string} nickname - Discord server nickname
      * @returns {boolean} - True if player was added, false if already in game
      */
-    addPlayer(userId, username, displayName) {
+    addPlayer(userId, username, nickname) {
         if (this.players.has(userId)) {
             return false; // Player already joined
         }
@@ -40,7 +40,7 @@ class GameSession {
 
         this.players.add(userId);
         this.playerUsernames.set(userId, username);
-        this.playerDisplayNames.set(userId, displayName || username);
+        this.playerNicknames.set(userId, nickname || username);
 
         // Update game state if we have enough players
         if (this.players.size >= this.maxPlayers) {
@@ -59,7 +59,7 @@ class GameSession {
         const removed = this.players.delete(userId);
         if (removed) {
             this.playerUsernames.delete(userId);
-            this.playerDisplayNames.delete(userId);
+            this.playerNicknames.delete(userId);
         }
 
         // Update game state if we no longer have enough players
@@ -178,12 +178,12 @@ class GameSession {
     }
 
     /**
-     * Get display name for a specific player
+     * Get nickname for a specific player
      * @param {string} userId - Discord user ID
-     * @returns {string|null} Display name or null if not found
+     * @returns {string|null} Nickname or null if not found
      */
-    getPlayerDisplayName(userId) {
-        return this.playerDisplayNames.get(userId) || this.getPlayerUsername(userId) || null;
+    getPlayerNickname(userId) {
+        return this.playerNicknames.get(userId) || this.getPlayerUsername(userId) || null;
     }
 
     /**
@@ -385,38 +385,24 @@ class GameSession {
                 winners: [{
                     type: 'Jester',
                     playerId: eliminatedId,
-                    username: this.getPlayerDisplayName(eliminatedId),
+                    username: this.getPlayerNickname(eliminatedId),
                     reason: 'Jester was lynched'
                 }],
                 winType: 'jester_lynched'
             };
         }
 
-        // Check if Executioner's target role was eliminated (Executioner wins immediately)
+        // Check if Executioner's target role was eliminated (Executioner wins but game continues)
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
             if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
-                // Executioner wins, check if Survivor also wins (if alive)
-                const winners = [{
-                    type: 'Executioner',
-                    playerId: playerId,
-                    username: this.getPlayerDisplayName(playerId),
-                    reason: 'Executioner got their target role lynched'
-                }];
-
-                // Add Survivor as co-winner if alive
-                const survivorId = this.getSurvivorId();
-                if (survivorId && this.alivePlayers.has(survivorId)) {
-                    winners.push({
-                        type: 'Survivor',
-                        playerId: survivorId,
-                        username: this.getPlayerDisplayName(survivorId),
-                        reason: 'Survivor was alive at game end'
-                    });
-                }
-
+                // Executioner wins but game continues
                 return {
-                    gameEnded: true,
-                    winners: winners,
+                    gameEnded: false,
+                    executionerWin: {
+                        playerId: playerId,
+                        username: this.getPlayerNickname(playerId),
+                        reason: 'Executioner got their target role lynched'
+                    },
                     winType: 'executioner_target_lynched'
                 };
             }
@@ -430,7 +416,7 @@ class GameSession {
                 const winners = [{
                     type: 'Mayor',
                     playerId: mayorId,
-                    username: this.getPlayerDisplayName(mayorId),
+                    username: this.getPlayerNickname(mayorId),
                     reason: 'Mayor eliminated the Mafia'
                 }];
 
@@ -440,7 +426,7 @@ class GameSession {
                     winners.push({
                         type: 'Survivor',
                         playerId: survivorId,
-                        username: this.getPlayerDisplayName(survivorId),
+                        username: this.getPlayerNickname(survivorId),
                         reason: 'Survivor was alive at game end'
                     });
                 }
@@ -481,7 +467,7 @@ class GameSession {
                 const winners = [{
                     type: 'Mafia',
                     playerId: mafiaId,
-                    username: this.getPlayerDisplayName(mafiaId),
+                    username: this.getPlayerNickname(mafiaId),
                     reason: 'Mafia killed the Mayor'
                 }];
 
@@ -491,7 +477,7 @@ class GameSession {
                     winners.push({
                         type: 'Survivor',
                         playerId: survivorId,
-                        username: this.getPlayerDisplayName(survivorId),
+                        username: this.getPlayerNickname(survivorId),
                         reason: 'Survivor was alive at game end'
                     });
                 }
@@ -629,7 +615,7 @@ class GameSession {
                 this.convertExecutionerToJester(playerId);
                 roleChanges.push({
                     playerId: playerId,
-                    username: this.getPlayerDisplayName(playerId),
+                    username: this.getPlayerNickname(playerId),
                     oldRole: 'EXECUTIONER',
                     newRole: 'JESTER',
                     reason: 'Target role was killed at night'
@@ -729,7 +715,7 @@ class GameSession {
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
             playersWithRoles.push({
                 id: playerId,
-                username: this.getPlayerDisplayName(playerId),
+                username: this.getPlayerNickname(playerId),
                 role: assignment.role,
                 roleInfo: assignment.roleInfo,
                 isAlive: this.alivePlayers.has(playerId),
@@ -756,7 +742,7 @@ class GameSession {
         this.roleAssignments = {};
         this.players.clear();
         this.playerUsernames.clear();
-        this.playerDisplayNames.clear();
+        this.playerNicknames.clear();
     }
 }
 

@@ -172,8 +172,7 @@ function createRoleMessage(assignment) {
     return {
         title: `${roleInfo.emoji} You are the ${roleInfo.name}!`,
         description: description,
-        color: getColorForAlignment(roleInfo.alignment),
-        footer: { text: `Alignment: ${roleInfo.alignment}` }
+        color: getColorForAlignment(roleInfo.alignment)
     };
 }
 

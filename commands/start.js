@@ -58,7 +58,9 @@ module.exports = {
                 });
             }
 
-            const added = gameSession.addPlayer(userId, interaction.user.username, interaction.user.displayName);
+            const member = interaction.guild.members.cache.get(userId);
+            const nickname = member ? (member.nickname || member.user.username) : interaction.user.username;
+            const added = gameSession.addPlayer(userId, interaction.user.username, nickname);
             if (!added) {
                 return await interaction.reply({
                     content: '❌ Unable to join the game. It might be full.',
@@ -246,87 +248,58 @@ function createButtonRow(gameSession) {
  * @param {GameSession} gameSession - The game session
  */
 async function sendRoleAssignments(interaction, gameSession) {
-    const roleAssignments = gameSession.getAllRoleAssignments();
+    // Send roles directly to players and start day phase immediately
+    const roleEmbed = new EmbedBuilder()
+        .setTitle('🎭 Roles have been assigned!')
+        .setDescription('Check your DMs for your role information. The day phase will begin shortly!')
+        .setColor(0x9932cc)
+        .setTimestamp();
 
-    // Create a collector to handle ephemeral role messages
-    const filter = (buttonInteraction) => {
-        return buttonInteraction.customId === 'get_role' &&
-               gameSession.hasPlayer(buttonInteraction.user.id);
-    };
-
-    // Send a follow-up message with a button for players to get their roles
-    const roleButton = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('get_role')
-                .setLabel('Get My Role')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('🎭')
-        );
-
-    const roleMessage = await interaction.followUp({
-        content: '🎭 **Roles have been assigned!**\n\n' +
-                '**Players:** Click the button below to receive your role privately.\n' +
-                '⚠️ **Only you will see your role information!**',
-        components: [roleButton],
+    // Send role assignment announcement
+    await interaction.followUp({
+        embeds: [roleEmbed],
         flags: 0 // Public message
     });
 
-    // Create collector for role button clicks
-    const collector = roleMessage.createMessageComponentCollector({
-        filter,
-        time: 300000 // 5 minutes
-    });
+    // Send roles directly to each player
+    const playerIds = gameSession.getPlayerIds();
+    for (const playerId of playerIds) {
+        const assignment = gameSession.getPlayerRole(playerId);
+        if (assignment) {
+            try {
+                const user = await interaction.client.users.fetch(playerId);
+                const roleEmbed = createRoleMessage(assignment);
 
-    collector.on('collect', async (buttonInteraction) => {
-        const playerId = buttonInteraction.user.id;
-        const assignment = roleAssignments[playerId];
+                // Send role via DM
+                await user.send({ embeds: [roleEmbed] });
 
-        if (!assignment) {
-            return await buttonInteraction.reply({
-                content: '❌ No role assignment found for you!',
-                flags: 64 // Ephemeral
-            });
+                // Also ping them in the channel
+                const nickname = gameSession.getPlayerNickname(playerId);
+                await interaction.followUp({
+                    content: `<@${playerId}> Your role has been sent to your DMs!`,
+                    flags: 0 // Public message
+                });
+            } catch (error) {
+                console.error(`Failed to send role to ${playerId}:`, error);
+                // If DM fails, send ephemeral message in channel
+                try {
+                    const roleEmbed = createRoleMessage(assignment);
+                    await interaction.followUp({
+                        content: `<@${playerId}> Couldn't send DM, here's your role:`,
+                        embeds: [roleEmbed],
+                        flags: 0 // Public message (fallback)
+                    });
+                } catch (fallbackError) {
+                    console.error(`Failed to send fallback role to ${playerId}:`, fallbackError);
+                }
+            }
         }
+    }
 
-        // Create role message embed
-        const roleEmbed = createRoleMessage(assignment);
-
-        // Send ephemeral role message
-        await buttonInteraction.reply({
-            embeds: [new EmbedBuilder()
-                .setTitle(roleEmbed.title)
-                .setDescription(roleEmbed.description)
-                .setColor(roleEmbed.color)
-                .setFooter(roleEmbed.footer)
-                .setTimestamp()
-            ],
-            flags: 64 // Ephemeral
-        });
-    });
-
-    collector.on('end', async () => {
-        // Disable the button after 5 minutes
-        const disabledButton = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('get_role')
-                    .setLabel('Get My Role')
-                    .setStyle(ButtonStyle.Primary)
-                    .setEmoji('🎭')
-                    .setDisabled(true)
-            );
-
-        await roleMessage.edit({
-            content: '🎭 **Roles have been assigned!**\n\n' +
-                    '**Players:** Click the button below to receive your role privately.\n' +
-                    '⚠️ **Role assignment period has ended.**',
-            components: [disabledButton]
-        }).catch(console.error);
-
-        // Start the day phase
+    // Start day phase immediately after a short delay
+    setTimeout(async () => {
         await startDayPhase(interaction, gameSession);
-    });
+    }, 3000); // 3 second delay
 }
 
 /**
@@ -345,6 +318,13 @@ async function startDayPhase(interaction, gameSession) {
         components: voteButtons,
         flags: 0 // Public message
     });
+
+    // Pin the voting message
+    try {
+        await dayMessage.pin();
+    } catch (error) {
+        console.error('Failed to pin voting message:', error);
+    }
 
     // Create collector for voting buttons
     const filter = (buttonInteraction) => {
@@ -384,9 +364,9 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         const targetId = customId.replace('vote_', '');
 
         if (gameSession.castVote(userId, targetId)) {
-            const targetDisplayName = gameSession.getPlayerDisplayName(targetId);
+            const targetNickname = gameSession.getPlayerNickname(targetId);
             await interaction.reply({
-                content: `✅ You voted for **${targetDisplayName}**`,
+                content: `✅ You voted for **${targetNickname}**`,
                 flags: 64 // Ephemeral
             });
         } else {
@@ -399,8 +379,10 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
     } else if (customId === 'reveal_mayor') {
         // Handle Mayor reveal
         if (gameSession.revealMayor(userId)) {
+            const member = interaction.guild.members.cache.get(userId);
+            const nickname = member ? (member.nickname || member.user.username) : interaction.user.username;
             await interaction.reply({
-                content: `🏛️ **${interaction.user.displayName || interaction.user.username}** has revealed as the Mayor! Their votes now count as 4!`,
+                content: `🏛️ **${nickname}** has revealed as the Mayor! Their votes now count as 4!`,
                 flags: 0 // Public message
             });
         } else {
@@ -454,9 +436,9 @@ function createDayPhaseEmbed(gameSession) {
     // Create vote count display
     let voteCountText = '';
     for (const playerId of alivePlayers) {
-        const displayName = gameSession.getPlayerDisplayName(playerId);
+        const nickname = gameSession.getPlayerNickname(playerId);
         const voteCount = voteCounts.get(playerId) || 0;
-        voteCountText += `**${displayName}**: ${voteCount} vote${voteCount !== 1 ? 's' : ''}\n`;
+        voteCountText += `**${nickname}**: ${voteCount} vote${voteCount !== 1 ? 's' : ''}\n`;
     }
 
     if (!voteCountText) {
@@ -467,8 +449,8 @@ function createDayPhaseEmbed(gameSession) {
     let voteDetailsText = '';
     if (votes.size > 0) {
         for (const [voterId, targetId] of votes) {
-            const voterName = gameSession.getPlayerDisplayName(voterId);
-            const targetName = gameSession.getPlayerDisplayName(targetId);
+            const voterName = gameSession.getPlayerNickname(voterId);
+            const targetName = gameSession.getPlayerNickname(targetId);
             const voterRole = gameSession.getPlayerRole(voterId);
             const voteWeight = (voterRole?.role === 'MAYOR' && gameSession.isMayorRevealed()) ? ' (4 votes)' : '';
             voteDetailsText += `${voterName} → ${targetName}${voteWeight}\n`;
@@ -492,10 +474,10 @@ function createDayPhaseEmbed(gameSession) {
     // Add Mayor status if revealed
     if (gameSession.isMayorRevealed()) {
         const mayorId = gameSession.getMayorId();
-        const mayorDisplayName = gameSession.getPlayerDisplayName(mayorId);
+        const mayorNickname = gameSession.getPlayerNickname(mayorId);
         embed.addFields({
             name: '🏛️ Mayor Revealed',
-            value: `**${mayorDisplayName}** is the Mayor (votes count as 4)`,
+            value: `**${mayorNickname}** is the Mayor (votes count as 4)`,
             inline: false
         });
     }
@@ -515,11 +497,11 @@ function createVoteButtons(gameSession) {
     // Create vote buttons (max 5 buttons per row)
     const voteButtons = [];
     for (const playerId of alivePlayers) {
-        const displayName = gameSession.getPlayerDisplayName(playerId);
+        const nickname = gameSession.getPlayerNickname(playerId);
         voteButtons.push(
             new ButtonBuilder()
                 .setCustomId(`vote_${playerId}`)
-                .setLabel(`Vote ${displayName}`)
+                .setLabel(`Vote ${nickname}`)
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🗳️')
         );
@@ -601,6 +583,17 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
             )
             .setTimestamp();
 
+        // Check for Executioner win (game continues)
+        if (eliminationResult.executionerWin) {
+            const executioner = eliminationResult.executionerWin;
+            resultEmbed.addFields({
+                name: '🎯 Executioner Victory!',
+                value: `**${executioner.username}** wins as Executioner!\n*${executioner.reason}*\n\n*Game continues...*`,
+                inline: false
+            });
+            resultEmbed.setColor(0xffd700);
+        }
+
         // Check for game end
         if (eliminationResult.gameEnded) {
             const winResult = eliminationResult.winner;
@@ -646,6 +639,13 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
         embeds: [resultEmbed],
         flags: 0 // Public message
     });
+
+    // Unpin the voting message
+    try {
+        await dayMessage.unpin();
+    } catch (error) {
+        console.error('Failed to unpin voting message:', error);
+    }
 
     // If game ended, show final results and clean up
     if (eliminationResult.gameEnded) {
@@ -1004,20 +1004,9 @@ async function announceGameEnd(interaction, gameSession) {
 
     rolesEmbed.setDescription(rolesText);
 
-    // Add game statistics
-    const statsEmbed = new EmbedBuilder()
-        .setTitle('📊 Game Statistics')
-        .setColor(0x808080)
-        .addFields(
-            { name: '📅 Days Survived', value: `${gameSession.getDayNumber()}`, inline: true },
-            { name: '👥 Players', value: `${allPlayers.length}`, inline: true },
-            { name: '💀 Eliminated', value: `${allPlayers.filter(p => !p.isAlive).length}`, inline: true }
-        )
-        .setTimestamp();
-
-    // Send all embeds
+    // Send embeds (removed game statistics)
     await interaction.followUp({
-        embeds: [winnerEmbed, rolesEmbed, statsEmbed],
+        embeds: [winnerEmbed, rolesEmbed],
         flags: 0 // Public message
     });
 
