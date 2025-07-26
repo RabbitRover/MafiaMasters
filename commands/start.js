@@ -53,7 +53,7 @@ async function handleButtonInteraction(interaction) {
                 });
             }
 
-            const member = interaction.guild.members.cache.get(userId);
+            const member = await interaction.guild.members.fetch(userId).catch(() => null);
             const nickname = member ? (member.nickname || member.user.username) : interaction.user.username;
             const added = gameSession.addPlayer(userId, interaction.user.username, nickname);
             if (!added) {
@@ -242,106 +242,43 @@ function createButtonRow(gameSession) {
  * @param {GameSession} gameSession - The game session
  */
 async function sendRoleAssignments(interaction, gameSession) {
-    // Create role assignment button for each player
+    // Send role assignment announcement
     const roleEmbed = new EmbedBuilder()
         .setTitle('🎭 Roles have been assigned!')
-        .setDescription('Click the button below to see your role privately. Only you will see your role information!')
+        .setDescription('Each player will receive their role information privately. The day phase will begin shortly!')
         .setColor(0x9932cc)
         .setTimestamp();
 
-    // Create "Get My Role" button
-    const roleButton = new ButtonBuilder()
-        .setCustomId('get_role')
-        .setLabel('Get My Role')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('🎭');
-
-    const roleRow = new ActionRowBuilder().addComponents(roleButton);
-
-    // Send role assignment message
-    const roleMessage = await interaction.followUp({
+    await interaction.followUp({
         embeds: [roleEmbed],
-        components: [roleRow],
         flags: 0 // Public message
     });
 
-    // Set up role distribution collector
-    const roleCollector = roleMessage.createMessageComponentCollector({
-        componentType: ComponentType.Button,
-        time: 300000 // 5 minutes
-    });
+    // Send roles directly to each player via ephemeral messages
+    const playerIds = gameSession.getPlayerIds();
+    for (const playerId of playerIds) {
+        const assignment = gameSession.getPlayerRole(playerId);
+        if (assignment) {
+            try {
+                // Create role message embed
+                const roleEmbed = createRoleMessage(assignment);
 
-    const playersWhoGotRoles = new Set();
-
-    roleCollector.on('collect', async (roleInteraction) => {
-        const userId = roleInteraction.user.id;
-
-        // Check if user is in the game
-        if (!gameSession.hasPlayer(userId)) {
-            await roleInteraction.reply({
-                content: '❌ You are not in this game!',
-                flags: 64 // Ephemeral
-            });
-            return;
+                // Send ephemeral follow-up message to the specific player
+                await interaction.followUp({
+                    content: `<@${playerId}> Here is your role:`,
+                    embeds: [roleEmbed],
+                    flags: 64 // Ephemeral - only visible to mentioned user
+                });
+            } catch (error) {
+                console.error(`Failed to send role to ${playerId}:`, error);
+            }
         }
+    }
 
-        // Check if player already got their role
-        if (playersWhoGotRoles.has(userId)) {
-            await roleInteraction.reply({
-                content: '❌ You already received your role!',
-                flags: 64 // Ephemeral
-            });
-            return;
-        }
-
-        // Get player's role assignment
-        const assignment = gameSession.getPlayerRole(userId);
-        if (!assignment) {
-            await roleInteraction.reply({
-                content: '❌ Role assignment error!',
-                flags: 64 // Ephemeral
-            });
-            return;
-        }
-
-        // Create role message embed
-        const roleEmbed = createRoleMessage(assignment);
-
-        // Send role to player via ephemeral message
-        await roleInteraction.reply({
-            embeds: [roleEmbed],
-            flags: 64 // Ephemeral
-        });
-
-        playersWhoGotRoles.add(userId);
-
-        // Check if all players have received their roles
-        if (playersWhoGotRoles.size === gameSession.getPlayerCount()) {
-            // All players have their roles, start day phase
-            roleCollector.stop();
-
-            // Wait a moment then start day phase
-            setTimeout(async () => {
-                await startDayPhase(interaction, gameSession);
-            }, 2000);
-        }
-    });
-
-    roleCollector.on('end', async () => {
-        // Disable the role button
-        roleButton.setDisabled(true);
-        await roleMessage.edit({
-            embeds: [roleEmbed],
-            components: [roleRow]
-        });
-
-        // If not all players got roles, start day phase anyway
-        if (playersWhoGotRoles.size < gameSession.getPlayerCount()) {
-            setTimeout(async () => {
-                await startDayPhase(interaction, gameSession);
-            }, 1000);
-        }
-    });
+    // Start day phase after a short delay
+    setTimeout(async () => {
+        await startDayPhase(interaction, gameSession);
+    }, 3000); // 3 second delay
 }
 
 /**
@@ -370,8 +307,13 @@ async function startDayPhase(interaction, gameSession) {
 
     // Create collector for voting buttons
     const filter = (buttonInteraction) => {
-        return gameSession.hasPlayer(buttonInteraction.user.id) &&
-               gameSession.getAlivePlayers().has(buttonInteraction.user.id);
+        const userId = buttonInteraction.user.id;
+        // Allow host to interact even if eliminated (for end day button)
+        if (gameSession.isHost(userId)) {
+            return gameSession.hasPlayer(userId);
+        }
+        // Other players must be alive and in game
+        return gameSession.hasPlayer(userId) && gameSession.getAlivePlayers().has(userId);
     };
 
     const collector = dayMessage.createMessageComponentCollector({
@@ -379,11 +321,43 @@ async function startDayPhase(interaction, gameSession) {
         time: 600000 // 10 minutes
     });
 
+    // Set up 3-minute auto-timer for day phase end
+    const autoEndTimer = setTimeout(async () => {
+        if (!gameSession.hasGameEnded() && gameSession.isDayPhase()) {
+            try {
+                await dayMessage.edit({
+                    content: '⏰ **Day phase auto-ended after 3 minutes!**',
+                    embeds: [dayMessage.embeds[0]],
+                    components: [] // Remove all buttons
+                });
+
+                // Create a fake interaction for processing day end
+                const fakeInteraction = {
+                    ...interaction,
+                    reply: async (options) => {
+                        return await interaction.followUp(options);
+                    },
+                    followUp: async (options) => {
+                        return await interaction.followUp(options);
+                    }
+                };
+
+                await processDayPhaseEnd(fakeInteraction, gameSession, dayMessage);
+                collector.stop();
+            } catch (error) {
+                console.error('Error in auto day end:', error);
+            }
+        }
+    }, 180000); // 3 minutes
+
     collector.on('collect', async (buttonInteraction) => {
         await handleDayPhaseInteraction(buttonInteraction, gameSession, dayMessage);
     });
 
     collector.on('end', async () => {
+        // Clear the auto-end timer
+        clearTimeout(autoEndTimer);
+
         // Auto-end day phase if time runs out
         if (gameSession.isDayPhase()) {
             await processDayPhaseEnd(interaction, gameSession, dayMessage);
@@ -421,7 +395,7 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
     } else if (customId === 'reveal_mayor') {
         // Handle Mayor reveal
         if (gameSession.revealMayor(userId)) {
-            const member = interaction.guild.members.cache.get(userId);
+            const member = await interaction.guild.members.fetch(userId).catch(() => null);
             const nickname = member ? (member.nickname || member.user.username) : interaction.user.username;
             await interaction.reply({
                 content: `🏛️ **${nickname}** has revealed as the Mayor! Their votes now count as 4!`,
@@ -442,7 +416,7 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         });
 
     } else if (customId === 'end_day') {
-        // Handle day phase end (host only)
+        // Handle day phase end (host only - even if eliminated)
         if (gameSession.isHost(userId)) {
             // Reply to the interaction first
             await interaction.reply({
@@ -780,12 +754,12 @@ async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
     // Create kill buttons for all alive players except Mafia
     for (const playerId of alivePlayers) {
         if (playerId !== mafiaId) {
-            const username = gameSession.getPlayerUsername(playerId);
+            const nickname = gameSession.getPlayerNickname(playerId);
             const playerRole = gameSession.getPlayerRole(playerId);
 
             // Show if player is Executioner (cannot be killed)
             const isExecutioner = playerRole?.role === 'EXECUTIONER';
-            const buttonLabel = isExecutioner ? `${username} (Protected)` : `Kill ${username}`;
+            const buttonLabel = isExecutioner ? `${nickname} (Protected)` : `Kill ${nickname}`;
 
             killButtons.push(
                 new ButtonBuilder()
@@ -825,42 +799,27 @@ async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
         )
         .setTimestamp();
 
-    // Send ephemeral message to Mafia
-    try {
-        const mafiaUser = await interaction.guild.members.fetch(mafiaId);
-        await mafiaUser.send({
-            embeds: [mafiaEmbed],
-            components: rows
-        });
-    } catch (dmError) {
-        // If DM fails, send ephemeral message in channel
-        console.log('Could not DM Mafia, sending ephemeral message instead');
+    // Send ephemeral message to Mafia in channel
+    const mafiaMessage = await interaction.followUp({
+        content: `<@${mafiaId}> **Your night action:**`,
+        embeds: [mafiaEmbed],
+        components: rows,
+        flags: 64 // Ephemeral - only visible to the Mafia
+    });
 
-        // Create a follow-up message that only the Mafia can see
-        const mafiaMessage = await interaction.followUp({
-            content: `<@${mafiaId}> **Your night action:**`,
-            embeds: [mafiaEmbed],
-            components: rows,
-            flags: 0 // Public message but targeted
-        });
+    // Create collector for Mafia actions
+    const filter = (buttonInteraction) => {
+        return buttonInteraction.user.id === mafiaId;
+    };
 
-        // Create collector for Mafia actions
-        const filter = (buttonInteraction) => {
-            return buttonInteraction.user.id === mafiaId;
-        };
+    const collector = mafiaMessage.createMessageComponentCollector({
+        filter,
+        time: 120000 // 2 minutes
+    });
 
-        const collector = mafiaMessage.createMessageComponentCollector({
-            filter,
-            time: 120000 // 2 minutes
-        });
-
-        collector.on('collect', async (buttonInteraction) => {
-            await handleMafiaKillAction(buttonInteraction, gameSession);
-
-            // Delete the message after action is taken
-            await mafiaMessage.delete().catch(console.error);
-        });
-    }
+    collector.on('collect', async (buttonInteraction) => {
+        await handleMafiaKillAction(buttonInteraction, gameSession);
+    });
 }
 
 /**
