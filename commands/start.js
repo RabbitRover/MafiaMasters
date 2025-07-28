@@ -387,6 +387,9 @@ async function startDayPhase(interaction, gameSession) {
         time: 600000 // 10 minutes
     });
 
+    // Store collector reference on the message for manual stopping
+    dayMessage.collector = collector;
+
     // Set up 3-minute auto-timer for day phase end
     const autoEndTimer = setTimeout(async () => {
         if (!gameSession.hasGameEnded() && gameSession.isDayPhase()) {
@@ -492,6 +495,10 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
             });
 
             await processDayPhaseEnd(interaction, gameSession, dayMessage);
+            // Stop the collector to prevent further interactions
+            if (dayMessage.collector) {
+                dayMessage.collector.stop();
+            }
             return; // Don't update the message again
         } else {
             await interaction.reply({
@@ -501,7 +508,16 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         }
     }
 
-    // Don't update the message constantly - keep original voting interface
+    // Update the day phase message with current vote counts
+    if (!gameSession.hasGameEnded()) {
+        const updatedEmbed = createDayPhaseEmbed(gameSession);
+        const updatedButtons = createVoteButtons(gameSession);
+
+        await dayMessage.edit({
+            embeds: [updatedEmbed],
+            components: updatedButtons
+        }).catch(console.error);
+    }
 }
 
 /**
@@ -649,6 +665,11 @@ function createVoteButtons(gameSession) {
  */
 async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
     const eliminationResult = gameSession.processElimination();
+
+    // Stop the collector to prevent further interactions
+    if (dayMessage.collector) {
+        dayMessage.collector.stop();
+    }
 
     // Disable all buttons
     const disabledRows = createVoteButtons(gameSession).map(row => {
