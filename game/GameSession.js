@@ -406,6 +406,21 @@ class GameSession {
      * @returns {Object} - Win condition result
      */
     checkWinConditions(eliminatedId, eliminatedRole) {
+        // Check if Executioner's target role was eliminated (Executioner wins but game continues)
+        let executionerWin = null;
+        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+            if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
+                // Mark Executioner as having won
+                assignment.hasWon = true;
+                executionerWin = {
+                    playerId: playerId,
+                    username: this.getPlayerNickname(playerId),
+                    reason: 'Executioner got their target role lynched'
+                };
+                break;
+            }
+        }
+
         // Check if Jester was eliminated (Jester wins immediately)
         if (eliminatedRole.role === 'JESTER') {
             const winners = [{
@@ -432,22 +447,6 @@ class GameSession {
                 executionerWin: executionerWin
             };
         }
-
-        // Check if Executioner's target role was eliminated (Executioner wins but game continues)
-        let executionerWin = null;
-        for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
-            if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
-                // Mark Executioner as having won
-                assignment.hasWon = true;
-                executionerWin = {
-                    playerId: playerId,
-                    username: this.getPlayerNickname(playerId),
-                    reason: 'Executioner got their target role lynched'
-                };
-                break;
-            }
-        }
-
         // Check if Mafia was eliminated (Game ends - Mayor and Survivor win if alive)
         if (eliminatedRole.role === 'MAFIA') {
             const winners = [];

@@ -1133,8 +1133,29 @@ async function announceGameEnd(interaction, gameSession) {
         time: 300000 // 5 minutes
     });
 
+    let gameStarted = false; // Track if a new game has been started
+
     collector.on('collect', async (buttonInteraction) => {
         if (buttonInteraction.customId === 'start_new_game') {
+            // Check if a game has already been started
+            if (gameStarted) {
+                await buttonInteraction.reply({
+                    content: '❌ A new game is already being started!',
+                    flags: 64 // Ephemeral
+                });
+                return;
+            }
+
+            // Mark that a game is being started
+            gameStarted = true;
+
+            // Disable the button immediately
+            startNewButton.setDisabled(true);
+            await gameEndMessage.edit({
+                embeds: [winnerEmbed, rolesEmbed],
+                components: [buttonRow]
+            }).catch(console.error);
+
             // Anyone can start a new game
             await buttonInteraction.reply({
                 content: '🎮 Starting a new game...',
@@ -1145,8 +1166,14 @@ async function announceGameEnd(interaction, gameSession) {
             const channelId = buttonInteraction.channelId;
             const hostId = buttonInteraction.user.id;
 
-            // Remove old game session
-            activeSessions.delete(channelId);
+            // Check if there's already an active session (double-check)
+            if (activeSessions.has(channelId)) {
+                await buttonInteraction.followUp({
+                    content: '❌ There is already an active game in this channel!',
+                    flags: 64 // Ephemeral
+                });
+                return;
+            }
 
             // Create new game session
             const newGameSession = new GameSession(hostId, channelId);
