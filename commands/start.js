@@ -781,10 +781,10 @@ async function startNightPhase(interaction, gameSession) {
         const nickname = gameSession.getPlayerNickname(playerId);
         const playerRole = gameSession.getPlayerRole(playerId);
 
-        // Executioner and Mafia cannot be killed, but don't show protection
+        // Only Mafia cannot be killed (disabled), Executioner is clickable but immune
         const isExecutioner = playerRole?.role === 'EXECUTIONER';
         const isMafia = playerId === mafiaId;
-        const isDisabled = isExecutioner || isMafia;
+        const isDisabled = isMafia; // Only disable Mafia button
 
         let buttonLabel, buttonStyle, buttonEmoji;
         if (isMafia) {
@@ -793,7 +793,7 @@ async function startNightPhase(interaction, gameSession) {
             buttonEmoji = '🚫';
         } else {
             buttonLabel = `Kill ${nickname}`;
-            buttonStyle = isExecutioner ? ButtonStyle.Secondary : ButtonStyle.Danger;
+            buttonStyle = ButtonStyle.Danger;
             buttonEmoji = '🔪';
         }
 
@@ -899,9 +899,20 @@ async function handleMafiaKillAction(interaction, gameSession) {
 
     if (customId.startsWith('night_kill_')) {
         const targetId = customId.replace('night_kill_', '');
+        const targetRole = gameSession.getPlayerRole(targetId);
+        const targetNickname = gameSession.getPlayerNickname(targetId);
+
+        // Check if target is Executioner (immune to night kills)
+        if (targetRole?.role === 'EXECUTIONER') {
+            await interaction.reply({
+                content: `🛡️ You attempted to eliminate **${targetNickname}**, but they were protected and survived the night.`,
+                flags: 64 // Ephemeral
+            });
+            // Don't set a kill target - no one dies
+            return;
+        }
 
         if (gameSession.setNightKillTarget(targetId)) {
-            const targetNickname = gameSession.getPlayerNickname(targetId);
             await interaction.reply({
                 content: `🔪 You have chosen to eliminate **${targetNickname}** tonight.`,
                 flags: 64 // Ephemeral
@@ -1103,21 +1114,36 @@ async function announceGameEnd(interaction, gameSession) {
 
     collector.on('collect', async (buttonInteraction) => {
         if (buttonInteraction.customId === 'start_new_game') {
-            // Only allow the original host to start a new game
-            if (buttonInteraction.user.id === gameSession.getHostId()) {
-                await buttonInteraction.reply({
-                    content: '🎮 Starting a new game...',
-                    flags: 64 // Ephemeral
-                });
+            // Anyone can start a new game
+            await buttonInteraction.reply({
+                content: '🎮 Starting a new game...',
+                flags: 64 // Ephemeral
+            });
 
-                // Start a new game
-                await handleStartCommand(buttonInteraction, activeSessions);
-            } else {
-                await buttonInteraction.reply({
-                    content: '❌ Only the original host can start a new game!',
-                    flags: 64 // Ephemeral
-                });
-            }
+            // Create a new game session with the button clicker as host
+            const channelId = buttonInteraction.channelId;
+            const hostId = buttonInteraction.user.id;
+
+            // Remove old game session
+            activeSessions.delete(channelId);
+
+            // Create new game session
+            const newGameSession = new GameSession(hostId, channelId);
+            activeSessions.set(channelId, newGameSession);
+
+            // Create the initial embed and buttons for new lobby
+            const embed = await createGameEmbed(newGameSession, buttonInteraction.guild);
+            const row = createButtonRow(newGameSession);
+
+            // Send new lobby message
+            await buttonInteraction.followUp({
+                embeds: [embed],
+                components: [row],
+                flags: 0 // Public message
+            });
+
+            // Stop the collector
+            collector.stop();
         }
     });
 
