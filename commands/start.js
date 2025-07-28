@@ -371,13 +371,6 @@ async function startDayPhase(interaction, gameSession) {
         flags: 0 // Public message
     });
 
-    // Pin the voting message
-    try {
-        await dayMessage.pin();
-    } catch (error) {
-        console.error('Failed to pin voting message:', error);
-    }
-
     // Create collector for voting buttons
     const filter = (buttonInteraction) => {
         const userId = buttonInteraction.user.id;
@@ -508,16 +501,7 @@ async function handleDayPhaseInteraction(interaction, gameSession, dayMessage) {
         }
     }
 
-    // Update the day phase message with current vote counts
-    if (!gameSession.hasGameEnded()) {
-        const updatedEmbed = createDayPhaseEmbed(gameSession);
-        const updatedButtons = createVoteButtons(gameSession);
-
-        await dayMessage.edit({
-            embeds: [updatedEmbed],
-            components: updatedButtons
-        }).catch(console.error);
-    }
+    // Don't update the message constantly - keep original voting interface
 }
 
 /**
@@ -698,7 +682,7 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
             )
             .setTimestamp();
 
-        // Check for Executioner win (game continues)
+        // Check for Executioner win (game continues) - announce but don't end game
         if (eliminationResult.executionerWin) {
             const executioner = eliminationResult.executionerWin;
             resultEmbed.addFields({
@@ -755,13 +739,6 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
         flags: 0 // Public message
     });
 
-    // Unpin the voting message
-    try {
-        await dayMessage.unpin();
-    } catch (error) {
-        console.error('Failed to unpin voting message:', error);
-    }
-
     // If game ended, show final results and clean up
     if (eliminationResult.gameEnded) {
         await announceGameEnd(interaction, gameSession);
@@ -804,23 +781,19 @@ async function startNightPhase(interaction, gameSession) {
         const nickname = gameSession.getPlayerNickname(playerId);
         const playerRole = gameSession.getPlayerRole(playerId);
 
-        // Show if player is Executioner (cannot be killed) or Mafia (cannot kill self)
+        // Executioner and Mafia cannot be killed, but don't show protection
         const isExecutioner = playerRole?.role === 'EXECUTIONER';
         const isMafia = playerId === mafiaId;
         const isDisabled = isExecutioner || isMafia;
 
         let buttonLabel, buttonStyle, buttonEmoji;
-        if (isExecutioner) {
-            buttonLabel = `${nickname} (Protected)`;
-            buttonStyle = ButtonStyle.Secondary;
-            buttonEmoji = '🛡️';
-        } else if (isMafia) {
+        if (isMafia) {
             buttonLabel = `${nickname}`;
             buttonStyle = ButtonStyle.Secondary;
             buttonEmoji = '🚫';
         } else {
             buttonLabel = `Kill ${nickname}`;
-            buttonStyle = ButtonStyle.Danger;
+            buttonStyle = isExecutioner ? ButtonStyle.Secondary : ButtonStyle.Danger;
             buttonEmoji = '🔪';
         }
 
@@ -857,8 +830,7 @@ async function startNightPhase(interaction, gameSession) {
         .setColor(0x2c2f33)
         .addFields(
             { name: '👥 Alive Players', value: `${alivePlayers.size} players remaining`, inline: true },
-            { name: '📅 Day', value: `Day ${gameSession.getDayNumber()}`, inline: true },
-            { name: '🛡️ Protected Players', value: 'Executioner cannot be killed at night', inline: false }
+            { name: '📅 Day', value: `Day ${gameSession.getDayNumber()}`, inline: true }
         )
         .setTimestamp();
 

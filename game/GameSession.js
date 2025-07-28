@@ -408,31 +408,43 @@ class GameSession {
     checkWinConditions(eliminatedId, eliminatedRole) {
         // Check if Jester was eliminated (Jester wins immediately)
         if (eliminatedRole.role === 'JESTER') {
+            const winners = [{
+                type: 'Jester',
+                playerId: eliminatedId,
+                username: this.getPlayerNickname(eliminatedId),
+                reason: 'Jester was lynched'
+            }];
+
+            // Add Executioner win if they achieved their goal
+            if (executionerWin) {
+                winners.push({
+                    type: 'Executioner',
+                    playerId: executionerWin.playerId,
+                    username: executionerWin.username,
+                    reason: executionerWin.reason
+                });
+            }
+
             return {
                 gameEnded: true,
-                winners: [{
-                    type: 'Jester',
-                    playerId: eliminatedId,
-                    username: this.getPlayerNickname(eliminatedId),
-                    reason: 'Jester was lynched'
-                }],
-                winType: 'jester_lynched'
+                winners: winners,
+                winType: 'jester_lynched',
+                executionerWin: executionerWin
             };
         }
 
         // Check if Executioner's target role was eliminated (Executioner wins but game continues)
+        let executionerWin = null;
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
             if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
-                // Executioner wins but game continues
-                return {
-                    gameEnded: false,
-                    executionerWin: {
-                        playerId: playerId,
-                        username: this.getPlayerNickname(playerId),
-                        reason: 'Executioner got their target role lynched'
-                    },
-                    winType: 'executioner_target_lynched'
+                // Mark Executioner as having won
+                assignment.hasWon = true;
+                executionerWin = {
+                    playerId: playerId,
+                    username: this.getPlayerNickname(playerId),
+                    reason: 'Executioner got their target role lynched'
                 };
+                break;
             }
         }
 
@@ -462,6 +474,16 @@ class GameSession {
                 });
             }
 
+            // Add Executioner win if they achieved their goal
+            if (executionerWin) {
+                winners.push({
+                    type: 'Executioner',
+                    playerId: executionerWin.playerId,
+                    username: executionerWin.username,
+                    reason: executionerWin.reason
+                });
+            }
+
             // If no winners, still end the game
             if (winners.length === 0) {
                 winners.push({
@@ -475,7 +497,8 @@ class GameSession {
             return {
                 gameEnded: true,
                 winners: winners,
-                winType: 'mafia_eliminated'
+                winType: 'mafia_eliminated',
+                executionerWin: executionerWin
             };
         }
 
@@ -503,7 +526,7 @@ class GameSession {
         if (eliminatedRole.role === 'MAYOR') {
             const mafiaId = this.getMafiaId();
             if (mafiaId) {
-                // Mafia wins, check if Survivor also wins (if alive)
+                // Mafia wins, check if Survivor and Executioner also win
                 const winners = [{
                     type: 'Mafia',
                     playerId: mafiaId,
@@ -520,6 +543,19 @@ class GameSession {
                         username: this.getPlayerNickname(survivorId),
                         reason: 'Survivor was alive at game end'
                     });
+                }
+
+                // Check if Executioner also wins (if their target was eliminated earlier)
+                for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
+                    if (assignment.role === 'EXECUTIONER' && assignment.hasWon) {
+                        winners.push({
+                            type: 'Executioner',
+                            playerId: playerId,
+                            username: this.getPlayerNickname(playerId),
+                            reason: 'Executioner achieved their goal earlier'
+                        });
+                        break;
+                    }
                 }
 
                 return {
