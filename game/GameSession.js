@@ -21,6 +21,10 @@ class GameSession {
         // Night phase system
         this.nightKillTarget = null; // Player marked for elimination by Mafia
         this.dayNumber = 1; // Track current day number
+
+        // Timeout and collector management for cleanup
+        this.activeTimeouts = new Set();
+        this.activeCollectors = new Set();
     }
 
     /**
@@ -86,6 +90,46 @@ class GameSession {
      */
     getHostId() {
         return this.hostId;
+    }
+
+    /**
+     * Add a timeout to be tracked for cleanup
+     * @param {NodeJS.Timeout} timeoutId - The timeout ID
+     */
+    addTimeout(timeoutId) {
+        this.activeTimeouts.add(timeoutId);
+    }
+
+    /**
+     * Add a collector to be tracked for cleanup
+     * @param {MessageComponentCollector} collector - The collector
+     */
+    addCollector(collector) {
+        this.activeCollectors.add(collector);
+
+        // Auto-remove when collector ends
+        collector.on('end', () => {
+            this.activeCollectors.delete(collector);
+        });
+    }
+
+    /**
+     * Clear all active timeouts and collectors
+     */
+    cleanup() {
+        // Clear all timeouts
+        for (const timeoutId of this.activeTimeouts) {
+            clearTimeout(timeoutId);
+        }
+        this.activeTimeouts.clear();
+
+        // Stop all collectors
+        for (const collector of this.activeCollectors) {
+            if (!collector.ended) {
+                collector.stop();
+            }
+        }
+        this.activeCollectors.clear();
     }
 
     /**
@@ -339,7 +383,8 @@ class GameSession {
      * @returns {Object} - Result object with elimination info and win conditions
      */
     processElimination() {
-        const voteCounts = this.getVoteCounts();
+        try {
+            const voteCounts = this.getVoteCounts();
 
         // Find player(s) with most votes
         let maxVotes = 0;
@@ -397,6 +442,17 @@ class GameSession {
             gameEnded: winResult.gameEnded,
             winner: winResult.gameEnded ? winResult : null
         };
+        } catch (error) {
+            console.error('Error in processElimination:', error);
+            // Return safe fallback result
+            return {
+                eliminated: null,
+                reason: 'error',
+                gameEnded: false,
+                winner: null,
+                error: 'Failed to process elimination'
+            };
+        }
     }
 
     /**
@@ -406,8 +462,9 @@ class GameSession {
      * @returns {Object} - Win condition result
      */
     checkWinConditions(eliminatedId, eliminatedRole) {
-        // Check if Executioner's target role was eliminated (Executioner wins but game continues)
-        let executionerWin = null;
+        try {
+            // Check if Executioner's target role was eliminated (Executioner wins but game continues)
+            let executionerWin = null;
         for (const [playerId, assignment] of Object.entries(this.roleAssignments)) {
             if (assignment.role === 'EXECUTIONER' && assignment.targetRole === eliminatedRole.role) {
                 // Mark Executioner as having won
@@ -507,6 +564,16 @@ class GameSession {
             winners: [],
             winType: null
         };
+        } catch (error) {
+            console.error('Error in checkWinConditions:', error);
+            // Return safe fallback - game continues
+            return {
+                gameEnded: false,
+                winners: [],
+                winType: null,
+                error: 'Failed to check win conditions'
+            };
+        }
     }
 
     /**

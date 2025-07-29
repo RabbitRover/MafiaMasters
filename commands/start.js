@@ -6,6 +6,7 @@ const { assignRoles, createRoleMessage } = require('../game/roles');
 const activeSessions = new Map();
 
 async function handleStartCommand(interaction, sessionsMap = activeSessions) {
+    try {
         const channelId = interaction.channelId;
         const hostId = interaction.user.id;
 
@@ -29,6 +30,27 @@ async function handleStartCommand(interaction, sessionsMap = activeSessions) {
             embeds: [embed],
             components: [row]
         });
+    } catch (error) {
+        console.error('Error in handleStartCommand:', error);
+
+        // Clean up session if it was created
+        const channelId = interaction.channelId;
+        if (activeSessions.has(channelId)) {
+            const gameSession = activeSessions.get(channelId);
+            gameSession.cleanup();
+            activeSessions.delete(channelId);
+        }
+
+        // Send error message to user
+        try {
+            await interaction.reply({
+                content: '❌ There was an error starting the game. Please try again.',
+                flags: 64 // Ephemeral
+            });
+        } catch (replyError) {
+            console.error('Failed to send error reply:', replyError);
+        }
+    }
 }
 
 // Handle button interactions
@@ -275,6 +297,7 @@ async function sendRoleAssignments(interaction, gameSession) {
         componentType: ComponentType.Button,
         time: 300000 // 5 minutes
     });
+    gameSession.addCollector(roleCollector);
 
     const playersWhoGotRoles = new Set();
     let dayPhaseStarted = false; // Prevent multiple day phase starts
@@ -328,9 +351,10 @@ async function sendRoleAssignments(interaction, gameSession) {
             roleCollector.stop();
 
             // Wait a moment then start day phase
-            setTimeout(async () => {
+            const timeoutId = setTimeout(async () => {
                 await startDayPhase(interaction, gameSession);
             }, 2000);
+            gameSession.addTimeout(timeoutId);
         }
     });
 
@@ -345,19 +369,21 @@ async function sendRoleAssignments(interaction, gameSession) {
         // If not all players got roles and day phase hasn't started, start it anyway
         if (!dayPhaseStarted) {
             dayPhaseStarted = true;
-            setTimeout(async () => {
+            const timeoutId = setTimeout(async () => {
                 await startDayPhase(interaction, gameSession);
             }, 1000);
+            gameSession.addTimeout(timeoutId);
         }
     });
 
     // Fallback: Start day phase after a short delay if nothing else triggered it
-    setTimeout(async () => {
+    const fallbackTimeoutId = setTimeout(async () => {
         if (!dayPhaseStarted) {
             dayPhaseStarted = true;
             await startDayPhase(interaction, gameSession);
         }
     }, 5000); // 5 second fallback delay
+    gameSession.addTimeout(fallbackTimeoutId);
 }
 
 /**
@@ -401,6 +427,7 @@ async function startDayPhase(interaction, gameSession) {
 
     // Store collector reference on the message for manual stopping
     dayMessage.collector = collector;
+    gameSession.addCollector(collector);
 
     collector.on('collect', async (buttonInteraction) => {
         await handleDayPhaseInteraction(buttonInteraction, gameSession, dayMessage);
@@ -871,12 +898,13 @@ async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
         filter,
         time: 300000 // 5 minutes
     });
+    gameSession.addCollector(collector);
 
     collector.on('collect', async (buttonInteraction) => {
         await handleMafiaKillAction(buttonInteraction, gameSession);
 
         // Process night phase end after Mafia makes their choice
-        setTimeout(async () => {
+        const timeoutId = setTimeout(async () => {
             // Find the night message by looking for recent messages
             const nightMessage = await interaction.channel.messages.fetch({ limit: 10 })
                 .then(messages => messages.find(msg =>
@@ -886,6 +914,7 @@ async function sendMafiaKillOptions(interaction, gameSession, mafiaId) {
 
             await processNightPhaseEnd(interaction, gameSession, nightMessage);
         }, 2000);
+        gameSession.addTimeout(timeoutId);
 
         collector.stop();
     });
@@ -1007,21 +1036,21 @@ async function processNightPhaseEnd(interaction, gameSession, nightMessage) {
                 inline: false
             });
 
-            // Send private message to the converted player
+            // Send ephemeral message instead of DM
             try {
-                const convertedPlayer = await interaction.guild.members.fetch(roleChange.playerId);
                 const newAssignment = gameSession.getPlayerRole(roleChange.playerId);
                 const roleEmbed = createRoleMessage(newAssignment);
 
-                await convertedPlayer.send({
-                    content: '🔄 **Your role has changed!**',
+                await interaction.followUp({
+                    content: `<@${roleChange.playerId}> 🔄 **Your role has changed!**`,
                     embeds: [new EmbedBuilder()
                         .setTitle(roleEmbed.title)
                         .setDescription(roleEmbed.description)
                         .setColor(roleEmbed.color)
                         .setFooter(roleEmbed.footer)
                         .setTimestamp()
-                    ]
+                    ],
+                    flags: 64 // Ephemeral - only visible to the mentioned user
                 });
             } catch (error) {
                 console.error('Could not send role change message:', error);
@@ -1060,6 +1089,9 @@ async function processNightPhaseEnd(interaction, gameSession, nightMessage) {
  * @param {GameSession} gameSession - The game session
  */
 async function announceGameEnd(interaction, gameSession) {
+    // Clean up all timeouts and collectors
+    gameSession.cleanup();
+
     const gameWinner = gameSession.getGameWinner();
     const allPlayers = gameSession.getAllPlayersWithRoles();
 
