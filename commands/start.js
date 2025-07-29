@@ -277,6 +277,7 @@ async function sendRoleAssignments(interaction, gameSession) {
     });
 
     const playersWhoGotRoles = new Set();
+    let dayPhaseStarted = false; // Prevent multiple day phase starts
 
     roleCollector.on('collect', async (roleInteraction) => {
         const userId = roleInteraction.user.id;
@@ -321,8 +322,9 @@ async function sendRoleAssignments(interaction, gameSession) {
         playersWhoGotRoles.add(userId);
 
         // Check if all players have received their roles
-        if (playersWhoGotRoles.size === gameSession.getPlayerCount()) {
+        if (playersWhoGotRoles.size === gameSession.getPlayerCount() && !dayPhaseStarted) {
             // All players have their roles, start day phase
+            dayPhaseStarted = true;
             roleCollector.stop();
 
             // Wait a moment then start day phase
@@ -340,18 +342,22 @@ async function sendRoleAssignments(interaction, gameSession) {
             components: [roleRow]
         });
 
-        // If not all players got roles, start day phase anyway
-        if (playersWhoGotRoles.size < gameSession.getPlayerCount()) {
+        // If not all players got roles and day phase hasn't started, start it anyway
+        if (!dayPhaseStarted) {
+            dayPhaseStarted = true;
             setTimeout(async () => {
                 await startDayPhase(interaction, gameSession);
             }, 1000);
         }
     });
 
-    // Start day phase after a short delay
+    // Fallback: Start day phase after a short delay if nothing else triggered it
     setTimeout(async () => {
-        await startDayPhase(interaction, gameSession);
-    }, 3000); // 3 second delay
+        if (!dayPhaseStarted) {
+            dayPhaseStarted = true;
+            await startDayPhase(interaction, gameSession);
+        }
+    }, 5000); // 5 second fallback delay
 }
 
 /**
@@ -360,6 +366,12 @@ async function sendRoleAssignments(interaction, gameSession) {
  * @param {GameSession} gameSession - The game session
  */
 async function startDayPhase(interaction, gameSession) {
+    // Prevent multiple day phase starts
+    if (gameSession.isDayPhase()) {
+        console.log('Day phase already started, skipping duplicate start');
+        return;
+    }
+
     gameSession.startDayPhase();
 
     const dayEmbed = createDayPhaseEmbed(gameSession);
@@ -749,6 +761,12 @@ async function processDayPhaseEnd(interaction, gameSession, dayMessage) {
  * @param {GameSession} gameSession - The game session
  */
 async function startNightPhase(interaction, gameSession) {
+    // Prevent multiple night phase starts
+    if (gameSession.isNightPhase()) {
+        console.log('Night phase already started, skipping duplicate start');
+        return;
+    }
+
     gameSession.startNightPhase();
 
     const mafiaId = gameSession.getMafiaId();
@@ -1083,97 +1101,17 @@ async function announceGameEnd(interaction, gameSession) {
 
     rolesEmbed.setDescription(rolesText);
 
-    // Create "Start New Game" button
-    const startNewButton = new ButtonBuilder()
-        .setCustomId('start_new_game')
-        .setLabel('Start New Game')
-        .setStyle(ButtonStyle.Success)
-        .setEmoji('🎮');
+    // Add instruction to use command for new game
+    const instructionEmbed = new EmbedBuilder()
+        .setTitle('🎮 Start New Game')
+        .setDescription('To start a new game, use the `/mafia start` command.')
+        .setColor(0x00ff00)
+        .setFooter({ text: 'Anyone can host a new game!' });
 
-    const buttonRow = new ActionRowBuilder().addComponents(startNewButton);
-
-    // Send embeds with start new game button
-    const gameEndMessage = await interaction.followUp({
-        embeds: [winnerEmbed, rolesEmbed],
-        components: [buttonRow],
+    // Send embeds with instruction
+    await interaction.followUp({
+        embeds: [winnerEmbed, rolesEmbed, instructionEmbed],
         flags: 0 // Public message
-    });
-
-    // Set up collector for start new game button
-    const collector = gameEndMessage.createMessageComponentCollector({
-        componentType: ComponentType.Button,
-        time: 300000 // 5 minutes
-    });
-
-    let gameStarted = false; // Track if a new game has been started
-
-    collector.on('collect', async (buttonInteraction) => {
-        if (buttonInteraction.customId === 'start_new_game') {
-            // Check if a game has already been started
-            if (gameStarted) {
-                await buttonInteraction.reply({
-                    content: '❌ A new game is already being started!',
-                    flags: 64 // Ephemeral
-                });
-                return;
-            }
-
-            // Mark that a game is being started
-            gameStarted = true;
-
-            // Disable the button immediately
-            startNewButton.setDisabled(true);
-            await gameEndMessage.edit({
-                embeds: [winnerEmbed, rolesEmbed],
-                components: [buttonRow]
-            }).catch(console.error);
-
-            // Anyone can start a new game
-            await buttonInteraction.reply({
-                content: '🎮 Starting a new game...',
-                flags: 64 // Ephemeral
-            });
-
-            // Create a new game session with the button clicker as host
-            const channelId = buttonInteraction.channelId;
-            const hostId = buttonInteraction.user.id;
-
-            // Check if there's already an active session (double-check)
-            if (activeSessions.has(channelId)) {
-                await buttonInteraction.followUp({
-                    content: '❌ There is already an active game in this channel!',
-                    flags: 64 // Ephemeral
-                });
-                return;
-            }
-
-            // Create new game session
-            const newGameSession = new GameSession(hostId, channelId);
-            activeSessions.set(channelId, newGameSession);
-
-            // Create the initial embed and buttons for new lobby
-            const embed = await createGameEmbed(newGameSession, buttonInteraction.guild);
-            const row = createButtonRow(newGameSession);
-
-            // Send new lobby message
-            await buttonInteraction.followUp({
-                embeds: [embed],
-                components: [row],
-                flags: 0 // Public message
-            });
-
-            // Stop the collector
-            collector.stop();
-        }
-    });
-
-    collector.on('end', () => {
-        // Disable the button after timeout
-        startNewButton.setDisabled(true);
-        gameEndMessage.edit({
-            embeds: [winnerEmbed, rolesEmbed],
-            components: [buttonRow]
-        }).catch(console.error);
     });
 
     // Reset game state (optional - for potential restart functionality)
