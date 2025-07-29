@@ -64,7 +64,7 @@ class GameSession {
         }
 
         // Update game state if we no longer have enough players
-        if (this.players.size < this.maxPlayers && this.gameState === 'ready') {
+        if (this.players.size < this.maxPlayers) {
             this.gameState = 'waiting';
         }
 
