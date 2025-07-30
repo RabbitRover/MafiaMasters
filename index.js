@@ -19,8 +19,10 @@ client.commands = new Collection();
 // Import commands
 const startCommand = require('./commands/start');
 const mafiaCommand = require('./commands/mafia');
+const endgameCommand = require('./commands/endgame');
 client.commands.set(startCommand.data.name, startCommand);
 client.commands.set(mafiaCommand.data.name, mafiaCommand);
+client.commands.set(endgameCommand.data.name, endgameCommand);
 
 // When the client is ready, run this code
 client.once('ready', async () => {
@@ -41,7 +43,12 @@ client.on('interactionCreate', async interaction => {
         }
 
         try {
-            await command.execute(interaction);
+            // Pass activeSessions to commands that need it
+            if (interaction.commandName === 'endgame') {
+                await command.execute(interaction, activeSessions);
+            } else {
+                await command.execute(interaction);
+            }
         } catch (error) {
             console.error('Error executing command:', error);
             

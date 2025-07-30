@@ -25,54 +25,70 @@ class GameSession {
         // Timeout and collector management for cleanup
         this.activeTimeouts = new Set();
         this.activeCollectors = new Set();
+
+        // Mutex for thread-safe operations
+        this.operationLock = false;
+        this.pendingOperations = [];
     }
 
     /**
-     * Add a player to the game session
+     * Add a player to the game session (thread-safe)
      * @param {string} userId - Discord user ID
      * @param {string} username - Discord username
      * @param {string} nickname - Discord server nickname
-     * @returns {boolean} - True if player was added, false if already in game
+     * @returns {Promise<boolean>} - True if player was added, false if already in game
      */
-    addPlayer(userId, username, nickname) {
-        if (this.players.has(userId)) {
-            return false; // Player already joined
-        }
+    async addPlayer(userId, username, nickname) {
+        return await this.withLock(async () => {
+            if (this.players.has(userId)) {
+                return false; // Player already joined
+            }
 
-        if (this.players.size >= this.maxPlayers) {
-            return false; // Game is full
-        }
+            if (this.players.size >= this.maxPlayers) {
+                return false; // Game is full
+            }
 
-        this.players.add(userId);
-        this.playerUsernames.set(userId, username);
-        this.playerNicknames.set(userId, nickname || username);
+            this.players.add(userId);
+            this.playerUsernames.set(userId, username);
+            this.playerNicknames.set(userId, nickname || username);
 
-        // Update game state if we have enough players
-        if (this.players.size >= this.maxPlayers) {
-            this.gameState = 'ready';
-        }
+            // Deduplicate as safety measure
+            const uniquePlayers = new Set(this.players);
+            this.players = uniquePlayers;
 
-        return true;
+            // Update game state if we have enough players
+            if (this.players.size >= this.maxPlayers) {
+                this.gameState = 'ready';
+            }
+
+            return true;
+        });
     }
 
     /**
-     * Remove a player from the game session
+     * Remove a player from the game session (thread-safe)
      * @param {string} userId - Discord user ID
-     * @returns {boolean} - True if player was removed
+     * @returns {Promise<boolean>} - True if player was removed
      */
-    removePlayer(userId) {
-        const removed = this.players.delete(userId);
-        if (removed) {
-            this.playerUsernames.delete(userId);
-            this.playerNicknames.delete(userId);
-        }
+    async removePlayer(userId) {
+        return await this.withLock(async () => {
+            const removed = this.players.delete(userId);
+            if (removed) {
+                this.playerUsernames.delete(userId);
+                this.playerNicknames.delete(userId);
+            }
 
-        // Update game state if we no longer have enough players
-        if (this.players.size < this.maxPlayers) {
-            this.gameState = 'waiting';
-        }
+            // Deduplicate as safety measure
+            const uniquePlayers = new Set(this.players);
+            this.players = uniquePlayers;
 
-        return removed;
+            // Update game state if we no longer have enough players
+            if (this.players.size < this.maxPlayers) {
+                this.gameState = 'waiting';
+            }
+
+            return removed;
+        });
     }
 
     /**
@@ -130,6 +146,70 @@ class GameSession {
             }
         }
         this.activeCollectors.clear();
+    }
+
+    /**
+     * Execute an operation with mutex lock to prevent race conditions
+     * @param {Function} operation - The operation to execute
+     * @returns {Promise} - The result of the operation
+     */
+    async withLock(operation) {
+        return new Promise((resolve, reject) => {
+            const executeOperation = async () => {
+                if (this.operationLock) {
+                    // Add to pending operations queue
+                    this.pendingOperations.push(executeOperation);
+                    return;
+                }
+
+                this.operationLock = true;
+                try {
+                    const result = await operation();
+                    resolve(result);
+                } catch (error) {
+                    reject(error);
+                } finally {
+                    this.operationLock = false;
+
+                    // Process next pending operation
+                    if (this.pendingOperations.length > 0) {
+                        const nextOperation = this.pendingOperations.shift();
+                        setImmediate(nextOperation);
+                    }
+                }
+            };
+
+            executeOperation();
+        });
+    }
+
+    /**
+     * Deduplicate the players array to prevent race condition issues
+     */
+    deduplicatePlayers() {
+        const uniquePlayers = new Map();
+        for (const [userId, playerData] of this.players) {
+            uniquePlayers.set(userId, playerData);
+        }
+        this.players = uniquePlayers;
+    }
+
+    /**
+     * End the game as a draw (admin command)
+     */
+    endGameAsDraw() {
+        this.gameState = 'ended';
+        this.gameWinner = {
+            gameEnded: true,
+            winners: [],
+            winType: 'admin_draw',
+            reason: 'Game ended by administrator as a draw'
+        };
+
+        // Clean up resources
+        this.cleanup();
+
+        return this.gameWinner;
     }
 
     /**

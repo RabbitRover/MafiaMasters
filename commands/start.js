@@ -77,7 +77,7 @@ async function handleButtonInteraction(interaction) {
 
             const member = await interaction.guild.members.fetch(userId).catch(() => null);
             const nickname = member ? (member.nickname || member.user.username) : interaction.user.username;
-            const added = gameSession.addPlayer(userId, interaction.user.username, nickname);
+            const added = await gameSession.addPlayer(userId, interaction.user.username, nickname);
             if (!added) {
                 return await interaction.reply({
                     content: '❌ Unable to join the game. It might be full.',
@@ -111,7 +111,7 @@ async function handleButtonInteraction(interaction) {
                 });
             }
 
-            const removed = gameSession.removePlayer(userId);
+            const removed = await gameSession.removePlayer(userId);
             if (!removed) {
                 return await interaction.reply({
                     content: '❌ Unable to leave the game.',
