@@ -25,7 +25,7 @@ client.commands.set(mafiaCommand.data.name, mafiaCommand);
 client.commands.set(endgameCommand.data.name, endgameCommand);
 
 // Import activeSessions from start command
-const { activeSessions } = startCommand;
+const activeSessions = startCommand.activeSessions;
 
 // When the client is ready, run this code
 client.once('ready', async () => {

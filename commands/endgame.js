@@ -32,14 +32,7 @@ module.exports = {
                 });
             }
 
-            // Check if game is actually in progress
-            if (gameSession.getGameState() === 'waiting') {
-                return await interaction.reply({
-                    content: '❌ The game has not started yet. Players are still joining.',
-                    flags: 64 // Ephemeral
-                });
-            }
-            
+            // Check if game has already ended
             if (gameSession.hasGameEnded()) {
                 return await interaction.reply({
                     content: '❌ The game has already ended.',
@@ -55,35 +48,59 @@ module.exports = {
             
             // Create draw announcement embed
             const endedByText = isHost ? 'game host' : 'administrator';
+            const gameStateText = gameState === 'waiting' ? 'lobby' : 'game';
+            const resultText = gameState === 'waiting' ? 'Lobby closed - No game played' : 'No winners - Game declared a draw';
+
             const drawEmbed = new EmbedBuilder()
-                .setTitle('🤝 Game Ended - Draw')
-                .setDescription(`The game has been ended by the ${endedByText}.`)
+                .setTitle(gameState === 'waiting' ? '🚪 Lobby Closed' : '🤝 Game Ended - Draw')
+                .setDescription(`The ${gameStateText} has been ended by the ${endedByText}.`)
                 .setColor(0x808080) // Gray color for draw
                 .addFields(
-                    { name: '📋 Result', value: 'No winners - Game declared a draw', inline: false },
+                    { name: '📋 Result', value: resultText, inline: false },
                     { name: isHost ? '🎮 Host' : '👮 Admin', value: `<@${interaction.user.id}>`, inline: true },
                     { name: '⏰ Time', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
                 )
                 .setTimestamp();
             
             // Get all players and their roles for final display
-            const allPlayers = gameSession.getAllPlayersWithRoles();
-            let rolesText = '';
-            
-            for (const [userId, playerData] of allPlayers) {
-                const nickname = gameSession.getPlayerNickname(userId);
-                const roleAssignment = gameSession.getPlayerRole(userId);
-                const roleIcon = getRoleIcon(roleAssignment?.role);
-                const statusIcon = playerData.alive ? '💚' : '💀';
-                
-                rolesText += `${statusIcon} ${nickname} - ${roleIcon} ${roleAssignment?.role || 'Unknown'}\n`;
+            let rolesEmbed;
+            const gameState = gameSession.getGameState();
+
+            if (gameState === 'waiting') {
+                // Game was in signup stage - show players without roles
+                const players = Array.from(gameSession.getPlayers());
+                let playersText = '';
+
+                for (const userId of players) {
+                    const nickname = gameSession.getPlayerNickname(userId);
+                    playersText += `👤 ${nickname}\n`;
+                }
+
+                rolesEmbed = new EmbedBuilder()
+                    .setTitle('👥 Players in Lobby')
+                    .setDescription(playersText || 'No players found')
+                    .setColor(0x808080)
+                    .setTimestamp();
+            } else {
+                // Game was in progress - show roles
+                const allPlayers = gameSession.getAllPlayersWithRoles();
+                let rolesText = '';
+
+                for (const [userId, playerData] of allPlayers) {
+                    const nickname = gameSession.getPlayerNickname(userId);
+                    const roleAssignment = gameSession.getPlayerRole(userId);
+                    const roleIcon = getRoleIcon(roleAssignment?.role);
+                    const statusIcon = playerData.alive ? '💚' : '💀';
+
+                    rolesText += `${statusIcon} ${nickname} - ${roleIcon} ${roleAssignment?.role || 'Unknown'}\n`;
+                }
+
+                rolesEmbed = new EmbedBuilder()
+                    .setTitle('📋 Final Player Roles')
+                    .setDescription(rolesText || 'No players found')
+                    .setColor(0x808080)
+                    .setTimestamp();
             }
-            
-            const rolesEmbed = new EmbedBuilder()
-                .setTitle('📋 Final Player Roles')
-                .setDescription(rolesText || 'No players found')
-                .setColor(0x808080)
-                .setTimestamp();
             
             // Add instruction to use command for new game
             const instructionEmbed = new EmbedBuilder()
