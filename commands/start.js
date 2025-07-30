@@ -1188,5 +1188,6 @@ module.exports = {
     handleStartCommand,
     handleButtonInteraction,
     getActiveSessions,
-    endSession
+    endSession,
+    activeSessions
 };

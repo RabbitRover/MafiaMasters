@@ -3,8 +3,7 @@ const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('disc
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('endgame')
-        .setDescription('End the current Mafia game as a draw (Admin only)')
-        .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+        .setDescription('End the current Mafia game as a draw (Admin or Host only)'),
     
     async execute(interaction, activeSessions) {
         try {
@@ -19,7 +18,20 @@ module.exports = {
             }
             
             const gameSession = activeSessions.get(channelId);
-            
+
+            // Check if user has permission to end the game
+            const userId = interaction.user.id;
+            const member = interaction.member;
+            const isHost = gameSession.getHostId() === userId;
+            const hasManageMessages = member && member.permissions.has(PermissionFlagsBits.ManageMessages);
+
+            if (!isHost && !hasManageMessages) {
+                return await interaction.reply({
+                    content: '❌ Only the game host or users with Manage Messages permission can end the game.',
+                    flags: 64 // Ephemeral
+                });
+            }
+
             // Check if game is actually in progress
             if (gameSession.getGameState() === 'waiting') {
                 return await interaction.reply({
@@ -42,13 +54,14 @@ module.exports = {
             activeSessions.delete(channelId);
             
             // Create draw announcement embed
+            const endedByText = isHost ? 'game host' : 'administrator';
             const drawEmbed = new EmbedBuilder()
                 .setTitle('🤝 Game Ended - Draw')
-                .setDescription('The game has been ended by an administrator.')
+                .setDescription(`The game has been ended by the ${endedByText}.`)
                 .setColor(0x808080) // Gray color for draw
                 .addFields(
                     { name: '📋 Result', value: 'No winners - Game declared a draw', inline: false },
-                    { name: '👮 Ended By', value: `<@${interaction.user.id}>`, inline: true },
+                    { name: isHost ? '🎮 Host' : '👮 Admin', value: `<@${interaction.user.id}>`, inline: true },
                     { name: '⏰ Time', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
                 )
                 .setTimestamp();

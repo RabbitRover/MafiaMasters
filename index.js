@@ -24,6 +24,9 @@ client.commands.set(startCommand.data.name, startCommand);
 client.commands.set(mafiaCommand.data.name, mafiaCommand);
 client.commands.set(endgameCommand.data.name, endgameCommand);
 
+// Import activeSessions from start command
+const { activeSessions } = startCommand;
+
 // When the client is ready, run this code
 client.once('ready', async () => {
     console.log(`✅ Logged in as ${client.user.tag}!`);
